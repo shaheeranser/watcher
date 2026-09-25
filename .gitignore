@@ -1,0 +1,33 @@
+# Build artifacts
+/bin/
+/watcher
+/cmd/watcher/watcher
+*.exe
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Local state (SQLite incident history, fallback spools)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/undelivered.jsonl
+
+# Environment
+.env
+.env.local
+
+# Planning notes: uncommitted, distinct from the committed specs/ directory
+/docs/
+
+# Agent/editor local state
+/.commandcode/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
