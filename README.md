@@ -131,12 +131,32 @@ Uncommitted planning notes live in `docs/`, which is not tracked.
 
 ## Evaluation harness
 
-Scoring Watcher's explanations against ground truth is driven by a separate
-test-harness repository, which produces the scenario logs and the ground-truth
-file that `watcher eval` consumes. See
-`specs/04-evaluation/design.md` §7 for the integration contract.
+Explanations are scored against known failures produced by
+[`shaheeranser/watcher_victim`](https://github.com/shaheeranser/watcher_victim),
+a separate failure-injection harness. It runs a deliberately fragile Node
+service under Docker and can trigger three failures on demand, each with a
+documented ground-truth root cause in `scenarios/*.json`:
 
-> Link forthcoming. <!-- TODO: replace with the harness repository URL -->
+| Scenario | Failure |
+|---|---|
+| `bad-input` | A null field makes `POST /api/items` dereference null — an uncaught `TypeError` with a real stack trace. |
+| `restart-loop` | Startup config validation throws before `listen()`; Docker restart-loops the byte-identical crash. |
+| `timeout` | `POST /api/bulk` buffers a body with no size limit and exhausts the V8 heap. |
+
+The harness scores Watcher by pointing its `evaluate.py` at Watcher's output —
+a captured JSON Lines file or a URL — so the two repos share no code:
+
+```sh
+./bin/watcher --file victim.log --model <model> > results.jsonl
+./evaluate.py --watcher results.jsonl --runs 5 --report reports/latest.md
+```
+
+`evaluate.py` accepts a JSON array, JSON Lines, or a single object (a webhook
+payload works too) and finds `likely_cause` in each record. In-repo scoring
+(`watcher eval`) is specified in
+[`specs/04-evaluation/design.md`](./specs/04-evaluation/design.md) §7 but is not
+implemented yet; until it is, the harness scores with its own script. See
+`docs/victim/` for per-run notes on the harness.
 
 ## Contributing
 
