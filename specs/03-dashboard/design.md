@@ -25,20 +25,11 @@ rendering and owns nothing else.** `attach` is a separate process launched
 explicitly by an operator, and it can be killed and restarted at will without
 affecting detection.
 
-```
-                 ┌───────────────────────────────┐
-   logs ────────▶│  watcher daemon (headless)    │
-                 │   pipeline → tracker → state  │──── SQLite (history)
-                 │                    machine    │
-                 │                        │      │
-                 │        read API ◀──────┘      │
-                 └───────────┬───────────────────┘
-                             │ unix socket / loopback HTTP
-                             │ (HTTP JSON + event stream)
-                 ┌───────────▼───────────────────┐
-                 │  watcher attach (TUI client)  │
-                 │  bubbletea + lipgloss         │
-                 └───────────────────────────────┘
+```mermaid
+flowchart TB
+    logs["application logs"] --> daemon["watcher daemon (headless)<br/>pipeline → tracker → state machine"]
+    daemon -->|"history via WAL"| sqlite[("SQLite")]
+    daemon -->|"read API over unix socket or loopback HTTP<br/>JSON plus event stream"| attach["watcher attach (TUI client)<br/>bubbletea + lipgloss"]
 ```
 
 Because the socket is a normal transport, this also makes the API usable by

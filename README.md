@@ -76,26 +76,32 @@ Log lines flow through four interfaces, with the crash-dedup and context work
 sitting in the middle so that the expensive model call happens rarely and with
 clean input:
 
-```
-                     ┌──────────────────────────────────────────────┐
-  Sources            │              Core engine                     │
-  ───────            │  ┌───────────┐   ┌───────────┐   ┌────────┐  │
-  stdin              │  │ context   │   │  finger-  │   │incident│  │
-  file   ──▶ Detector┤  │ curation  │──▶│ printing  │──▶│ state  │──┤
-  docker             │  └───────────┘   └───────────┘   │/counts │  │
-                     │                                  └────────┘  │
-                     └───────────────────────┬──────────────────────┘
-                                             │ curated excerpt
-                                             ▼
-                                    ┌─────────────────┐
-                                    │ Backend (Ollama)│
-                                    └────────┬────────┘
-                                             │ structured explanation
-                                             ▼
-                                    ┌─────────────────┐
-                                    │ Sinks: terminal │
-                                    │   jsonl webhook │
-                                    └─────────────────┘
+```mermaid
+flowchart LR
+    subgraph sources["Sources"]
+        s_stdin["stdin"]
+        s_file["file"]
+        s_docker["docker"]
+    end
+
+    subgraph core["Core engine"]
+        detector["Detector"]
+        curation["Context curation"]
+        fingerprint["Fingerprinting"]
+        counts["Incident state / counts"]
+    end
+
+    backend["Backend (Ollama)"]
+    sinks["Sinks: terminal · jsonl · webhook"]
+
+    s_stdin --> detector
+    s_file --> detector
+    s_docker --> detector
+    detector --> curation
+    curation --> fingerprint
+    fingerprint --> counts
+    counts -->|curated excerpt| backend
+    backend -->|structured explanation| sinks
 ```
 
 - **Source** — produces log lines. stdin and a single tailed file locally;

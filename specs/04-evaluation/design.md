@@ -13,11 +13,13 @@ from a plain file.
 
 `watcher eval` is a pure, offline, second entry point:
 
-```
-  truth file (JSON|CSV)  ─┐
-                          ├──▶  watcher eval  ──▶  text tally (slide)
-  results (JSONL|stdin)  ─┘                    └──▶  JSON report (CI)
-                                                   exit code (CI gate)
+```mermaid
+flowchart LR
+    truth["truth file: JSON or CSV"] --> eval["watcher eval"]
+    results["results: JSONL or stdin"] --> eval
+    eval --> tally["text tally (slide)"]
+    eval --> report["JSON report (CI)"]
+    eval --> exit["exit code (CI gate)"]
 ```
 
 It performs no detection, no fingerprinting, and no model calls. Everything it

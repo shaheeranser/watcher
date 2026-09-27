@@ -25,34 +25,15 @@ or a sink misbehaves.
 
 ## 2. Pipeline overview
 
-```
- stdin / file ──▶ ┌──────────┐
-                  │  Source  │ ──▶ Line ──┐
-                  └──────────┘            │
-                                          ▼
-                                 ┌────────────────┐
-                                 │    Detector    │ ──▶ Event ──┐
-                                 └────────────────┘             │
-                                                                ▼
-                                                  ┌──────────────────────────┐
-                                                  │ Context curation         │
-                                                  │ (bounded window/excerpt) │
-                                                  └────────────┬─────────────┘
-                                                               │ excerpt
-                        ┌──────────────────────────────────────┤
-                        ▼                                      ▼
-              ┌──────────────────┐                  ┌────────────────────┐
-              │  Fingerprinter   │ ── Fingerprint ─▶│  Incident tracker  │
-              └──────────────────┘                  │  (counts, times)   │
-                                                    └─────────┬──────────┘
-                                                              │ on first sight / window elapsed
-                                                    ┌─────────▼──────────┐
-                                                    │ Backend (Ollama)   │
-                                                    └─────────┬──────────┘
-                                                              │ Explanation
-                                                    ┌─────────▼──────────┐
-                                                    │ Sink (TTY / JSONL) │
-                                                    └────────────────────┘
+```mermaid
+flowchart TD
+    source["stdin / file"] -->|Line| detector["Detector"]
+    detector -->|Event| curation["Context curation<br/>(bounded window / excerpt)"]
+    curation -->|excerpt| fingerprinter["Fingerprinter"]
+    curation -->|excerpt| incident["Incident tracker<br/>(counts, times)"]
+    fingerprinter -->|Fingerprint| incident
+    incident -->|"on first sight / window elapsed"| backend["Backend (Ollama)"]
+    backend -->|Explanation| sink["Sink (TTY / JSONL)"]
 ```
 
 The `Source → Detector → Backend → Sink` chain is the spine. Fingerprinting,

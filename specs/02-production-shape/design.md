@@ -135,24 +135,14 @@ Design notes:
 
 ### 4.1 States and transitions
 
-```
-                        first occurrence
-                              │
-                              ▼
-        ┌──────────┐  occurrence, throttle elapsed   ┌──────────┐
-        │   New    │─────────────────────────────────▶│ Ongoing  │
-        │ (notify  │                                  │ (notify  │
-        │  once)   │◀───────(never)───────────────────│  every T)│
-        └────┬─────┘                                  └────┬─────┘
-             │                                             │
-             │        quiet for W (resolve window)         │
-             └──────────────────┬──────────────────────────┘
-                                ▼
-                          ┌───────────┐
-                          │ Resolved  │── occurrence ──▶ back to New
-                          │ (notify   │                  (fresh cycle)
-                          │  once)    │
-                          └───────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> New: first occurrence
+    New --> Ongoing: occurrence, throttle elapsed
+    Ongoing --> Ongoing: occurrence, throttled (count only)
+    New --> Resolved: quiet for W (resolve window)
+    Ongoing --> Resolved: quiet for W (resolve window)
+    Resolved --> New: occurrence (fresh cycle)
 ```
 
 - `New` — first occurrence. Emit a `new` notification immediately
