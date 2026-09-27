@@ -1,0 +1,19 @@
+[HIGH] abc123 count=3
+source: app.log
+first seen: 2026-01-02T03:04:05Z
+last seen:  2026-01-02T03:05:05Z
+model: qwen2.5-coder:0.5b
+summary: nil pointer dereference
+likely cause: handler dereferenced a nil request
+evidence:
+  - "panic: boom"
+  - "goroutine 1 [running]:"
+suggested fix: guard the nil check
+confidence: 0.80
+
+[UNKNOWN] def456 count=1
+source: /var/log/app.log
+first seen: 2026-01-02T03:04:05Z
+last seen:  2026-01-02T03:04:05Z
+explanation unavailable: dial tcp 127.0.0.1:11434: connect: connection refused
+
