@@ -46,16 +46,17 @@ func (t *Tracker) Observe(fingerprint, kind, source string, now time.Time) (Inci
 }
 
 // RecordExplanation stores the outcome of an explanation attempt, successful or
-// not, so later occurrences can reuse it.
-func (t *Tracker) RecordExplanation(fingerprint string, expl *backend.Explanation, model, explainErr string) {
+// not, so later occurrences can reuse it, and returns the updated incident.
+func (t *Tracker) RecordExplanation(fingerprint string, expl *backend.Explanation, model, explainErr string) Incident {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	inc, ok := t.incidents[fingerprint]
 	if !ok {
-		return
+		return Incident{}
 	}
 	inc.Explanation = expl
 	inc.Model = model
 	inc.ExplainErr = explainErr
+	return *inc
 }
