@@ -23,9 +23,8 @@ ollama serve
 ollama pull <model>
 ```
 
-> The default model is still an open decision
-> (`specs/01-core-engine/design.md`, OD-01-1) because it depends on the
-> hardware you deploy on. Until it is chosen, pass `--model` explicitly.
+> Watcher never bundles or defaults a model — naming one is a deployment
+> decision. Pass `--model` (or set `WATCHER_MODEL`); startup fails without it.
 
 ### Watch stdin
 
@@ -45,6 +44,30 @@ machine-readable incident stream:
 
 ```sh
 ./bin/watcher --file /var/log/app.log > incidents.jsonl
+```
+
+## Configuration
+
+Every setting can be given as a flag or an environment variable, with the flag
+winning when both are present (flag > environment > default).
+
+| Setting | Flag | Env | Default |
+|---|---|---|---|
+| Source file | `--file` | `WATCHER_FILE` | stdin |
+| Ollama base URL | `--ollama-url` | `WATCHER_OLLAMA_URL` | `http://localhost:11434` |
+| Model | `--model` | `WATCHER_MODEL` | *(required)* |
+| Preceding context lines (N) | `--context-before` | `WATCHER_CONTEXT_BEFORE` | `20` |
+| Following context lines (M) | `--context-after` | `WATCHER_CONTEXT_AFTER` | `10` |
+| Excerpt byte budget | `--context-budget` | `WATCHER_CONTEXT_BUDGET` | `8192` |
+| Backend workers | `--workers` | `WATCHER_WORKERS` | `1` |
+| Request timeout | `--ollama-timeout` | `WATCHER_OLLAMA_TIMEOUT` | `60s` |
+| Explanation window | `--explain-window` | `WATCHER_EXPLAIN_WINDOW` | `15m` |
+| Max block lines | `--max-block-lines` | `WATCHER_MAX_BLOCK_LINES` | `200` |
+| Start file from beginning | `--from-start` | `WATCHER_FROM_START` | `false` |
+
+```sh
+WATCHER_MODEL=qwen2.5-coder:0.5b \
+  ./bin/watcher --file /var/log/app.log --ollama-url http://ollama:11434
 ```
 
 ## Architecture
@@ -92,8 +115,8 @@ live count, not one alert per occurrence).
 
 ## Roadmap
 
-- [ ] `00` — Scaffolding (repository hygiene)
-- [ ] `01` — Core engine (stdin/file source, detector, fingerprinting, context
+- [x] `00` — Scaffolding (repository hygiene)
+- [x] `01` — Core engine (stdin/file source, detector, fingerprinting, context
       curation, Ollama backend, guardrail, output)
 - [ ] `02` — Production shape (Docker source, Compose packaging, incident state
       machine, webhook sink, heartbeat)

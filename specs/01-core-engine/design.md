@@ -363,13 +363,13 @@ struct is populated by `internal/config` and validated at startup.
 |---------|------|-----|---------|
 | Source file | `--file` | `WATCHER_FILE` | (stdin) |
 | Ollama base URL | `--ollama-url` | `WATCHER_OLLAMA_URL` | `http://localhost:11434` |
-| Model | `--model` | `WATCHER_MODEL` | *open decision OD-01-1* |
-| Preceding context lines (N) | `--context-before` | `WATCHER_CONTEXT_BEFORE` | *OD-01-2* |
-| Following context lines (M) | `--context-after` | `WATCHER_CONTEXT_AFTER` | *OD-01-2* |
-| Excerpt byte budget | `--context-budget` | `WATCHER_CONTEXT_BUDGET` | *OD-01-3* |
+| Model | `--model` | `WATCHER_MODEL` | *(required, no default — see §15)* |
+| Preceding context lines (N) | `--context-before` | `WATCHER_CONTEXT_BEFORE` | `20` |
+| Following context lines (M) | `--context-after` | `WATCHER_CONTEXT_AFTER` | `10` |
+| Excerpt byte budget | `--context-budget` | `WATCHER_CONTEXT_BUDGET` | `8192` |
 | Backend workers | `--workers` | `WATCHER_WORKERS` | `1` |
 | Request timeout | `--ollama-timeout` | `WATCHER_OLLAMA_TIMEOUT` | `60s` |
-| Explanation window | `--explain-window` | `WATCHER_EXPLAIN_WINDOW` | *OD-01-4* |
+| Explanation window | `--explain-window` | `WATCHER_EXPLAIN_WINDOW` | `15m` |
 | Max block lines | `--max-block-lines` | `WATCHER_MAX_BLOCK_LINES` | `200` |
 | Start file from beginning | `--from-start` | `WATCHER_FROM_START` | `false` |
 
@@ -404,21 +404,34 @@ struct is populated by `internal/config` and validated at startup.
 
 ## 15. Open decisions
 
-Flagged for the project owner (see also the consolidated list returned with
-this spec set):
+These were open when the milestone was drafted. They are now resolved, and the
+values below are what the implementation uses; the reasoning is recorded so a
+later milestone can revisit a choice rather than rediscover it.
 
-- **OD-01-1** — Default model name. Depends on the deployment target's
-  hardware; must be a small model. *Recommendation:* default to a small
-  code-capable instruct model and document the size/latency trade-off.
-- **OD-01-2** — Default N/M context window sizes. Larger = better explanations,
-  slower and more error-prone on small models.
-- **OD-01-3** — Excerpt budget (bytes or tokens). Must be chosen against the
-  default model's context length.
-- **OD-01-4** — Explanation window length: how long before a repeat occurrence
-  of the same fingerprint is allowed to trigger a fresh model call.
-- **OD-01-5** — Whether normalization lowercases text. Not lowercasing is safer
-  for identifier-bearing stack frames, but risks near-duplicate fingerprints.
-- **OD-01-6** — Whether `--file` should default to reading from the beginning
-  or from the current end (this doc assumes current end).
-- **OD-01-7** — Whether to ship a bundled fingerprint fixture corpus in-repo or
-  generate one in the property tests.
+- **OD-01-1 — Default model.** *Resolved:* there is no compiled-in default.
+  `--model` / `WATCHER_MODEL` is required and startup validation fails without
+  it. A model name is a property of the deployment — the sibling Ollama
+  container, the systemd unit, the command line — not of the binary. Watcher
+  never installs or pulls a model, so baking in a vendor-specific tag would add
+  a hardware assumption without saving the operator any work. This also keeps
+  the `Backend` interface swappable, which is the point.
+- **OD-01-2 — Context window.** *Resolved:* N = 20 preceding, M = 10 following.
+  Enough lead-in to catch a causal line above the crash without flooding a small
+  model.
+- **OD-01-3 — Excerpt budget.** *Resolved:* 8192 bytes. Comfortably inside a
+  small model's context while keeping a full stack trace.
+- **OD-01-4 — Explanation window.** *Resolved:* 15 minutes. One model call per
+  fingerprint per window; repeats in between only raise the count.
+- **OD-01-5 — Case folding in normalization.** *Resolved:* normalization does
+  **not** lowercase. Stack frames and identifiers stay exact; the small risk of
+  near-duplicate fingerprints is preferred to collapsing genuinely distinct
+  casing.
+- **OD-01-6 — File start position.** *Resolved:* a file source starts at the
+  current end; `--from-start` opts into reading existing content.
+- **OD-01-7 — Fingerprint fixture corpus.** *Resolved:* property tests generate
+  volatile-token variants in memory. No corpus is checked in, so there is
+  nothing to drift from the normalization rules.
+
+One deviation from §4 worth recording: `backend.Request` gained a `Source`
+field, because the prompt template in §8.1 interpolates `{{source}}` and the
+request shape given in §4 had no way to supply it.
