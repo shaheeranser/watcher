@@ -1,0 +1,5 @@
+2026-01-02T03:04:05Z INFO all good
+just a normal line
+ERROR: transient blip
+WARN: slow
+handled error without a stack

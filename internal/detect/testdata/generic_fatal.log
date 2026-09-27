@@ -1,0 +1,5 @@
+2026-01-02T03:04:05Z ERROR request failed
+FATAL: cannot connect to database
+  caused by: connection refused
+  dial tcp 127.0.0.1:5432
+2026-01-02T03:04:06Z INFO recovered
