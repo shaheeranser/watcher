@@ -19,9 +19,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          # No dependencies yet, so there is no go.sum to key a module cache on.
-          # Re-enable once the first dependency lands.
-          cache: false
+          cache: true
 
       - name: Build
         run: go build ./...
