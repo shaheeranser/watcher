@@ -131,3 +131,79 @@ func Of(kind string, block []Line) Fingerprint { ... }
 Package documentation is the one place a block comment belongs. It goes in
 `doc.go` or directly above `package`, and describes the package's job, not its
 internals.
+
+## 5. Tests are part of the design
+
+Tests are written with the code, not bolted on afterwards, and these conventions
+are what keep them fast, deterministic, and readable.
+
+- **Table-driven by default.** A slice of cases, each with a `name` and its
+  inputs and expectations, run through `t.Run`. A single obvious case gets a
+  small direct test, not a table.
+- **Golden files for anything that parses or renders text** — log blocks,
+  fingerprints, JSON, terminal output. They live in the package's `testdata/`
+  and are regenerated with an `-update` flag, e.g.
+  `go test ./internal/sink/ -run Golden -update`, so a golden diff is a
+  reviewable artifact rather than a mystery.
+- **Property-based tests for pure logic with invariants** — normalization,
+  hashing, framing. Use `testing/quick` with a custom `Generator`; do not
+  hand-pick a few inputs and call it property-based.
+- **Tests run offline and deterministically.** No live Ollama, Docker, or
+  network: stand in with `httptest` and fakes, and fix timestamps so goldens do
+  not churn. A test that genuinely needs a service is an integration test and
+  must be clearly separated and skippable.
+- **Test files sit beside the code**, named `<file>_test.go`, in the same
+  package unless they exercise only the exported API.
+
+## 6. Inject what you depend on
+
+A constructor takes what it needs — an `io.Reader` or `io.Writer`, a
+`*slog.Logger`, a clock, an HTTP client — so a test can pass a fake and capture
+output. Reaching for `os.Stdin`, `os.Stdout`, or `time.Now` inside logic makes
+behavior untestable; take them as parameters instead.
+
+```go
+// Good: the writer is a seam a test can fill.
+func NewTerminal(w io.Writer, color bool) *Terminal { ... }
+
+// Bad: the destination is welded in and cannot be captured.
+func NewTerminal(color bool) *Terminal { return &Terminal{w: os.Stdout} }
+```
+
+## 7. Errors and validation
+
+- Wrap with `%w` and enough context to locate the failure; never discard the
+  original error.
+- When several independent things can be wrong — a configuration, a set of
+  entries — collect them with `errors.Join` and report all of them at once,
+  rather than failing on the first and making the caller iterate.
+- No `panic` outside `main` and init-time programming errors. A malformed log
+  line, a missing file, or a failed request is an error to handle, not a crash.
+
+## 8. Naming and imports
+
+- A type is unexported unless a sibling package genuinely needs it.
+- When a package name collides with the standard library, alias the import at
+  the call site rather than renaming the package. `internal/context` keeps the
+  name its path implies; its one caller writes
+  `cctx "…/internal/context"`.
+- Constructors are `New` for the package's main type and `NewThing` for a
+  specific implementation. An interface implementation identifies itself with
+  `Name() string`.
+
+## 9. Dependencies
+
+The standard library comes first; add a dependency only when it does something
+the standard library genuinely cannot, and record the reason. The one dependency
+in this project is `golang.org/x/term`: `os.FileMode&os.ModeCharDevice` cannot
+tell a real terminal from `/dev/null`, and getting that wrong silently changes
+the output format.
+
+## 10. Concurrency
+
+- Bound every queue and channel, so a slow stage applies backpressure instead
+  of growing memory without limit.
+- Guard shared maps with a mutex; use atomics for counters that are only
+  incremented.
+- Every goroutine has an owner that waits for it. Shutdown cancels a context and
+  waits on a `sync.WaitGroup`, and tests assert that no goroutines leak.

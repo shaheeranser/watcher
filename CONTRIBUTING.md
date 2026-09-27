@@ -38,7 +38,10 @@ go build -o bin/watcher ./cmd/watcher
 
 The project-wide rules for file structure and comments are in
 [`specs/style-guide.md`](./specs/style-guide.md): one concern per file, comments
-that explain intent rather than mechanics, and no comment banners.
+that explain intent rather than mechanics, and no comment banners. How work is
+done — spec-first, open decisions, commit hygiene, the per-run reports — is in
+[`specs/agent-practices.md`](./specs/agent-practices.md), which applies to human
+contributors as much as to agents.
 
 - **`gofmt` is mandatory.** Run `gofmt -w .` (or let your editor do it) and
   check with `gofmt -l .`, which must print nothing.

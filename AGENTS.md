@@ -4,6 +4,11 @@ Instructions for AI coding agents working in this repository. This file is
 tool-agnostic: nothing in it assumes a particular agent product, vendor, or
 editor integration.
 
+The committed, authoritative standards are
+[`specs/style-guide.md`](./specs/style-guide.md) (how code should read) and
+[`specs/agent-practices.md`](./specs/agent-practices.md) (how work is done);
+this file is the entry point that points at them.
+
 ## Read the spec before you implement
 
 `specs/` is the project's design documentation and is committed. Before
