@@ -151,4 +151,193 @@ func TestParseRejectsBadEnvironment(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "WATCHER_OLLAMA_TIMEOUT") {
 		t.Fatalf("error = %v, want mention of WATCHER_OLLAMA_TIMEOUT", err)
 	}
+
+	_, err = Parse([]string{"--model", "m"}, envFrom(map[string]string{"WATCHER_SOURCES": "not-a-source"}))
+	if err == nil || !strings.Contains(err.Error(), "WATCHER_SOURCES") {
+		t.Fatalf("error = %v, want mention of WATCHER_SOURCES", err)
+	}
+}
+
+func TestParseSources(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		env  map[string]string
+		want []SourceSpec
+	}{
+		{
+			name: "file shorthand becomes a single source",
+			args: []string{"--model", "m", "--file", "/var/log/app.log"},
+			want: []SourceSpec{{Path: "/var/log/app.log"}},
+		},
+		{
+			name: "labeled sources from flags",
+			args: []string{"--model", "m", "--source", "backend=/var/log/backend.log", "--source", "worker=-"},
+			want: []SourceSpec{{Label: "backend", Path: "/var/log/backend.log"}, {Label: "worker", Path: "-"}},
+		},
+		{
+			name: "sources from environment",
+			env:  map[string]string{"WATCHER_SOURCES": "api=/var/log/api.log,db=-"},
+			args: []string{"--model", "m"},
+			want: []SourceSpec{{Label: "api", Path: "/var/log/api.log"}, {Label: "db", Path: "-"}},
+		},
+		{
+			name: "flags replace environment sources",
+			args: []string{"--model", "m", "--source", "flag=/f.log"},
+			env:  map[string]string{"WATCHER_SOURCES": "env=/e.log"},
+			want: []SourceSpec{{Label: "flag", Path: "/f.log"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Parse(tt.args, envFrom(tt.env))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if !equalSources(got.ResolvedSources(), tt.want) {
+				t.Errorf("sources = %+v, want %+v", got.ResolvedSources(), tt.want)
+			}
+		})
+	}
+}
+
+func TestSourceEffectiveLabel(t *testing.T) {
+	tests := []struct {
+		spec SourceSpec
+		want string
+	}{
+		{SourceSpec{Path: "/var/log/app.log"}, "/var/log/app.log"},
+		{SourceSpec{Path: "-"}, "stdin"},
+		{SourceSpec{Path: ""}, "stdin"},
+		{SourceSpec{Label: "backend", Path: "/var/log/app.log"}, "backend"},
+		{SourceSpec{Label: "worker", Path: "-"}, "worker"},
+	}
+	for _, tt := range tests {
+		if got := tt.spec.EffectiveLabel(); got != tt.want {
+			t.Errorf("%+v: label = %q, want %q", tt.spec, got, tt.want)
+		}
+	}
+}
+
+func TestParseRuntimeDefaults(t *testing.T) {
+	got, err := Parse([]string{"--model", "m"}, envFrom(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DockerHost != DefaultDockerHost {
+		t.Errorf("docker-host = %q, want %q", got.DockerHost, DefaultDockerHost)
+	}
+	if got.DockerSince != 0 {
+		t.Errorf("docker-since = %s, want 0s", got.DockerSince)
+	}
+	if got.WebhookFormat != "generic" || got.WebhookRetries != 5 ||
+		got.WebhookBackoffBase != time.Second || got.WebhookBackoffMax != 30*time.Second {
+		t.Errorf("unexpected webhook defaults: %+v", got)
+	}
+	if got.WebhookFallback != DefaultWebhookFallback {
+		t.Errorf("webhook-fallback = %q, want %q", got.WebhookFallback, DefaultWebhookFallback)
+	}
+	if got.ThrottleWindow != 15*time.Minute {
+		t.Errorf("throttle-window = %s, want 15m", got.ThrottleWindow)
+	}
+	if got.ContainersSet {
+		t.Error("containers should be unset by default")
+	}
+}
+
+func TestParseDockerSelector(t *testing.T) {
+	got, err := Parse([]string{"--model", "m", "--containers", "project=shop"}, envFrom(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Containers != "project=shop" || !got.ContainersSet {
+		t.Errorf("containers = %q set=%v, want project=shop set", got.Containers, got.ContainersSet)
+	}
+
+	got, err = Parse([]string{"--model", "m"}, envFrom(map[string]string{"WATCHER_CONTAINERS": "none"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Containers != ContainersDisabled || !got.ContainersSet {
+		t.Errorf("containers = %q set=%v, want none set", got.Containers, got.ContainersSet)
+	}
+}
+
+func TestParseValidationRuntime(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantSub string
+	}{
+		{
+			name:    "duplicate labels rejected",
+			args:    []string{"--model", "m", "--source", "restart=/a.log", "--source", "restart=/b.log"},
+			wantSub: "duplicate source label",
+		},
+		{
+			name:    "explicit label colliding with a default label rejected",
+			args:    []string{"--model", "m", "--file", "/a.log", "--source", "/a.log=/b.log"},
+			wantSub: "duplicate source label",
+		},
+		{
+			name:    "bad webhook format",
+			args:    []string{"--model", "m", "--webhook-format", "teams"},
+			wantSub: "webhook-format",
+		},
+		{
+			name:    "bad webhook url",
+			args:    []string{"--model", "m", "--webhook-url", "ftp://example.com"},
+			wantSub: "webhook-url",
+		},
+		{
+			name:    "webhook retries must be positive",
+			args:    []string{"--model", "m", "--webhook-retries", "0"},
+			wantSub: "webhook-retries must be at least 1",
+		},
+		{
+			name:    "backoff max below base",
+			args:    []string{"--model", "m", "--webhook-backoff-base", "10s", "--webhook-backoff-max", "1s"},
+			wantSub: "webhook-backoff-max",
+		},
+		{
+			name:    "negative docker-since",
+			args:    []string{"--model", "m", "--docker-since", "-1s"},
+			wantSub: "docker-since must not be negative",
+		},
+		{
+			name:    "negative throttle window",
+			args:    []string{"--model", "m", "--throttle-window", "-1s"},
+			wantSub: "throttle-window must not be negative",
+		},
+		{
+			name:    "source without label",
+			args:    []string{"--model", "m", "--source", "/a.log"},
+			wantSub: "label=path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.args, envFrom(nil))
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantSub)
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("error = %q, want substring %q", err, tt.wantSub)
+			}
+		})
+	}
+}
+
+func equalSources(got, want []SourceSpec) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
