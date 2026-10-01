@@ -3,6 +3,7 @@ package sink
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -126,5 +127,35 @@ func TestJSONLMarkersForUnavailable(t *testing.T) {
 	}
 	if strings.Count(out, "\n") != 1 {
 		t.Errorf("jsonl must emit exactly one line per result: %q", out)
+	}
+}
+
+type recordingSink struct {
+	name    string
+	err     error
+	results []Result
+}
+
+func (r *recordingSink) Name() string { return r.name }
+
+func (r *recordingSink) Emit(_ context.Context, res Result) error {
+	r.results = append(r.results, res)
+	return r.err
+}
+
+func TestMultiFansOutIndependently(t *testing.T) {
+	good := &recordingSink{name: "good"}
+	bad := &recordingSink{name: "bad", err: errors.New("receiver refused")}
+	multi := NewMulti(bad, good)
+
+	err := multi.Emit(context.Background(), fullResult())
+	if err == nil || !strings.Contains(err.Error(), "receiver refused") {
+		t.Errorf("err = %v, want it to report the failing sink", err)
+	}
+	if len(good.results) != 1 {
+		t.Errorf("good sink received %d results, want 1 (a failing sink must not suppress it)", len(good.results))
+	}
+	if len(bad.results) != 1 {
+		t.Errorf("failing sink received %d results, want 1", len(bad.results))
 	}
 }
