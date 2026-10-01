@@ -11,7 +11,7 @@ func TestObserveCountsAndGatesExplanations(t *testing.T) {
 	tr := NewTracker(15 * time.Minute)
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-	first, due := tr.Observe("fp1", "go-panic", "app.log", base)
+	first, due := tr.Observe("app.log", "fp1", "go-panic", base)
 	if !due {
 		t.Fatal("the first sighting must be due for an explanation")
 	}
@@ -19,7 +19,7 @@ func TestObserveCountsAndGatesExplanations(t *testing.T) {
 		t.Errorf("unexpected first observation: %+v", first)
 	}
 
-	second, due := tr.Observe("fp1", "go-panic", "app.log", base.Add(time.Minute))
+	second, due := tr.Observe("app.log", "fp1", "go-panic", base.Add(time.Minute))
 	if due {
 		t.Fatal("a repeat inside the window must not be due")
 	}
@@ -35,11 +35,11 @@ func TestWindowExpiryAllowsFreshExplanation(t *testing.T) {
 	tr := NewTracker(15 * time.Minute)
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-	tr.Observe("fp1", "go-panic", "app.log", base)
-	if _, due := tr.Observe("fp1", "go-panic", "app.log", base.Add(14*time.Minute)); due {
+	tr.Observe("app.log", "fp1", "go-panic", base)
+	if _, due := tr.Observe("app.log", "fp1", "go-panic", base.Add(14*time.Minute)); due {
 		t.Fatal("inside the window it must not be due")
 	}
-	if _, due := tr.Observe("fp1", "go-panic", "app.log", base.Add(16*time.Minute)); !due {
+	if _, due := tr.Observe("app.log", "fp1", "go-panic", base.Add(16*time.Minute)); !due {
 		t.Fatal("after the window it must be due again")
 	}
 }
@@ -48,7 +48,7 @@ func TestZeroWindowExplainsEveryOccurrence(t *testing.T) {
 	tr := NewTracker(0)
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	for i := 0; i < 3; i++ {
-		if _, due := tr.Observe("fp1", "go-panic", "app.log", base); !due {
+		if _, due := tr.Observe("app.log", "fp1", "go-panic", base); !due {
 			t.Fatalf("zero window must always be due (iteration %d)", i)
 		}
 	}
@@ -57,12 +57,12 @@ func TestZeroWindowExplainsEveryOccurrence(t *testing.T) {
 func TestRecordedExplanationIsReused(t *testing.T) {
 	tr := NewTracker(15 * time.Minute)
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	tr.Observe("fp1", "go-panic", "app.log", base)
+	tr.Observe("app.log", "fp1", "go-panic", base)
 
 	expl := &backend.Explanation{Summary: "nil deref", Severity: "high", Confidence: 0.7}
-	tr.RecordExplanation("fp1", expl, "test-model", "")
+	tr.RecordExplanation("app.log", "fp1", expl, "test-model", "")
 
-	repeat, due := tr.Observe("fp1", "go-panic", "app.log", base.Add(time.Minute))
+	repeat, due := tr.Observe("app.log", "fp1", "go-panic", base.Add(time.Minute))
 	if due {
 		t.Fatal("repeat must not be due")
 	}
@@ -78,12 +78,34 @@ func TestFingerprintsAreIndependent(t *testing.T) {
 	tr := NewTracker(15 * time.Minute)
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
-	tr.Observe("fp1", "go-panic", "app.log", base)
-	second, due := tr.Observe("fp2", "python-traceback", "app.log", base)
+	tr.Observe("app.log", "fp1", "go-panic", base)
+	second, due := tr.Observe("app.log", "fp2", "python-traceback", base)
 	if !due {
 		t.Fatal("a new fingerprint must be due regardless of others")
 	}
 	if second.Count != 1 || second.Kind != "python-traceback" {
 		t.Errorf("unexpected second incident: %+v", second)
+	}
+}
+
+func TestSameFingerprintOnTwoLabelsIsTwoIncidents(t *testing.T) {
+	tr := NewTracker(15 * time.Minute)
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	backendInc, due := tr.Observe("backend", "fpsame", "go-panic", base)
+	if !due || backendInc.Source != "backend" {
+		t.Fatalf("unexpected backend incident: %+v due=%v", backendInc, due)
+	}
+	frontendInc, due := tr.Observe("frontend", "fpsame", "go-panic", base)
+	if !due {
+		t.Fatal("the same fingerprint on a different label is a distinct, fresh incident")
+	}
+	if frontendInc.Count != 1 || frontendInc.Source != "frontend" {
+		t.Errorf("unexpected frontend incident: %+v", frontendInc)
+	}
+
+	again, _ := tr.Observe("backend", "fpsame", "go-panic", base.Add(time.Second))
+	if again.Count != 2 {
+		t.Errorf("backend count = %d, want 2", again.Count)
 	}
 }

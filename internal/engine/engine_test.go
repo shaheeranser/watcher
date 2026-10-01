@@ -51,6 +51,14 @@ func (b *blockingSource) Stream(ctx context.Context) (<-chan source.Line, error)
 	return ch, nil
 }
 
+type failingSource struct{ name string }
+
+func (f *failingSource) Name() string { return f.name }
+
+func (f *failingSource) Stream(context.Context) (<-chan source.Line, error) {
+	return nil, errors.New("cannot attach to source")
+}
+
 type fakeBackend struct {
 	mu    sync.Mutex
 	calls int
@@ -109,7 +117,7 @@ func validExplanation() backend.Explanation {
 
 func baseOptions(src source.Source, be backend.Backend, snk sink.Sink) Options {
 	return Options{
-		Source:        src,
+		Sources:       []source.Source{src},
 		Backend:       be,
 		Sink:          snk,
 		ContextBefore: 5,
@@ -288,5 +296,122 @@ func TestSlowSinkDropsAndCounts(t *testing.T) {
 
 	if dropped == 0 {
 		t.Error("expected the slow-sink policy to drop and count at least one result")
+	}
+}
+
+var pythonTraceback = []string{
+	"Traceback (most recent call last):",
+	`  File "/app/main.py", line 3, in <module>`,
+	"    main()",
+	`  File "/app/main.py", line 1, in main`,
+	`    raise ValueError("boom")`,
+	"ValueError: boom",
+}
+
+func TestSourcesDoNotCrossContaminate(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	snk := &captureSink{}
+	opts := baseOptions(&fakeSource{name: "x", lines: goPanic}, be, snk)
+	opts.Sources = []source.Source{
+		&fakeSource{name: "backend", lines: goPanic},
+		&fakeSource{name: "worker", lines: pythonTraceback},
+	}
+
+	if err := New(opts).Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	results := snk.all()
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2: %+v", len(results), results)
+	}
+	bySource := make(map[string]sink.Result, len(results))
+	for _, r := range results {
+		bySource[r.Source] = r
+	}
+	if r, ok := bySource["backend"]; !ok || r.Kind != "go-panic" {
+		t.Errorf("backend result = %+v", r)
+	}
+	if r, ok := bySource["worker"]; !ok || r.Kind != "python-traceback" {
+		t.Errorf("worker result = %+v", r)
+	}
+}
+
+func TestSameCrashOnTwoLabelsIsTwoIncidents(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	snk := &captureSink{}
+	opts := baseOptions(&fakeSource{name: "x", lines: goPanic}, be, snk)
+	opts.Sources = []source.Source{
+		&fakeSource{name: "backend", lines: goPanic},
+		&fakeSource{name: "frontend", lines: goPanic},
+	}
+
+	if err := New(opts).Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	results := snk.all()
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2 (same crash, two labels)", len(results))
+	}
+	seen := make(map[string]bool)
+	hash := results[0].Fingerprint
+	for _, r := range results {
+		if r.Count != 1 {
+			t.Errorf("%s count = %d, want 1", r.Source, r.Count)
+		}
+		if r.Fingerprint != hash {
+			t.Errorf("fingerprint %q differs across labels; the hash must not depend on the label", r.Fingerprint)
+		}
+		seen[r.Source] = true
+	}
+	if !seen["backend"] || !seen["frontend"] {
+		t.Errorf("labels seen = %v, want backend and frontend", seen)
+	}
+	if got := be.callCount(); got != 2 {
+		t.Errorf("backend calls = %d, want 2 (one per label)", got)
+	}
+}
+
+func TestOneSourceEndingKeepsOthersRunning(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	snk := &captureSink{}
+	opts := baseOptions(&fakeSource{name: "x", lines: goPanic}, be, snk)
+	opts.Sources = []source.Source{
+		&fakeSource{name: "app-a.log", lines: goPanic},
+		&blockingSource{name: "app-b.log"},
+	}
+	eng := New(opts)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- eng.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(snk.all()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(snk.all()) == 0 {
+		t.Fatal("no result arrived from the source that ended")
+	}
+	select {
+	case <-done:
+		t.Fatal("Run returned while another source was still active")
+	default:
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancellation")
+	}
+}
+
+func TestSourceSetupErrorIsFatal(t *testing.T) {
+	eng := New(baseOptions(&failingSource{name: "broken"}, &fakeBackend{resp: validExplanation()}, &captureSink{}))
+	err := eng.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "broken") {
+		t.Fatalf("error = %v, want a fatal setup error naming the source", err)
 	}
 }

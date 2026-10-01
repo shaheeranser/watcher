@@ -1,11 +1,12 @@
-// Package engine wires the pipeline together: it fans source lines to the
-// detector and the context ring, curates and fingerprints detected events,
-// tracks incidents, and drives the backend worker pool and the sink. It is the
-// only place that holds all four interfaces at once.
+// Package engine wires the pipeline together: it fans each source's lines into
+// a per-label stream, curates and fingerprints detected events, tracks
+// incidents, and drives the backend worker pool and the sink. It is the only
+// place that holds all four interfaces at once.
 package engine
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -23,10 +24,10 @@ import (
 
 const defaultBuffer = 1024
 
-// Options configures a single-engine run. Source, Backend, and Sink are the
+// Options configures a single-engine run. Sources, Backend, and Sink are the
 // seams tests replace with fakes.
 type Options struct {
-	Source        source.Source
+	Sources       []source.Source
 	Backend       backend.Backend
 	Sink          sink.Sink
 	Logger        *slog.Logger
@@ -39,20 +40,36 @@ type Options struct {
 	Buffer        int
 }
 
+// stream is one labeled pipeline: a ring of recent lines, the curator that
+// builds an excerpt from them, and the detector that assembles crash blocks. It
+// is per label, so a panic on one source can never be assembled with lines from
+// another.
+type stream struct {
+	ring     *cctx.Ring
+	curator  *cctx.Curator
+	detector detect.Detector
+	in       chan source.Line
+}
+
 // Engine owns one run of the pipeline. It is single-use: build a new one per
 // Run.
 type Engine struct {
-	source   source.Source
-	detector detect.Detector
-	curator  *cctx.Curator
-	ring     *cctx.Ring
-	backend  backend.Backend
-	sink     sink.Sink
-	tracker  *incident.Tracker
-	log      *slog.Logger
-	workers  int
-	buffer   int
-	dropped  atomic.Int64
+	sources []source.Source
+	backend backend.Backend
+	sink    sink.Sink
+	tracker *incident.Tracker
+	log     *slog.Logger
+	workers int
+	buffer  int
+	dropped atomic.Int64
+
+	contextBefore int
+	contextAfter  int
+	contextBudget int
+	maxBlockLines int
+
+	mu      sync.Mutex
+	streams map[string]*stream
 }
 
 func New(opts Options) *Engine {
@@ -68,26 +85,19 @@ func New(opts Options) *Engine {
 	if workers < 1 {
 		workers = 1
 	}
-
-	// The ring must outlast the longest possible block plus the window on
-	// either side, or preceding context would be evicted before it is used.
-	capacity := opts.MaxBlockLines + opts.ContextBefore + opts.ContextAfter + 128
-	if capacity < defaultBuffer {
-		capacity = defaultBuffer
-	}
-	ring := cctx.NewRing(capacity)
-
 	return &Engine{
-		source:   opts.Source,
-		detector: detect.New(opts.ContextAfter, opts.MaxBlockLines),
-		curator:  cctx.New(opts.ContextBefore, opts.ContextBudget, ring),
-		ring:     ring,
-		backend:  opts.Backend,
-		sink:     opts.Sink,
-		tracker:  incident.NewTracker(opts.ExplainWindow),
-		log:      log,
-		workers:  workers,
-		buffer:   buffer,
+		sources:       opts.Sources,
+		backend:       opts.Backend,
+		sink:          opts.Sink,
+		tracker:       incident.NewTracker(opts.ExplainWindow),
+		log:           log,
+		workers:       workers,
+		buffer:        buffer,
+		contextBefore: opts.ContextBefore,
+		contextAfter:  opts.ContextAfter,
+		contextBudget: opts.ContextBudget,
+		maxBlockLines: opts.MaxBlockLines,
+		streams:       make(map[string]*stream),
 	}
 }
 
@@ -95,29 +105,41 @@ func New(opts Options) *Engine {
 // keep up.
 func (e *Engine) Dropped() int64 { return e.dropped.Load() }
 
-// Run drives the pipeline until the context is cancelled or the source ends.
+// Run drives the pipeline until the context is cancelled or every source has
+// ended. A source reaching EOF stops only that source; the run ends 0 when the
+// last one is done, and cancellation stops it immediately (RT-SRC-6).
 func (e *Engine) Run(ctx context.Context) error {
-	lines, err := e.source.Stream(ctx)
-	if err != nil {
-		return err
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	lines := make([]<-chan source.Line, len(e.sources))
+	for i, src := range e.sources {
+		ch, err := src.Stream(runCtx)
+		if err != nil {
+			return fmt.Errorf("source %q: %w", src.Name(), err)
+		}
+		lines[i] = ch
 	}
 
-	detectorIn := make(chan source.Line, e.buffer)
 	events := make(chan detect.Event, e.buffer)
 	sinkIn := make(chan sink.Result, e.buffer)
 
-	var producers sync.WaitGroup
-	producers.Add(2)
+	var pipelines sync.WaitGroup
+	var routers sync.WaitGroup
+	for _, ch := range lines {
+		routers.Add(1)
+		go func(in <-chan source.Line) {
+			defer routers.Done()
+			e.route(runCtx, in, events, &pipelines)
+		}(ch)
+	}
+
+	// Every source ending closes only its own streams; the shared event channel
+	// closes once all of them, and their detectors, have finished.
 	go func() {
-		defer producers.Done()
-		e.feed(ctx, lines, detectorIn)
-	}()
-	go func() {
-		defer producers.Done()
-		defer close(events)
-		if err := e.detector.Detect(ctx, detectorIn, events); err != nil {
-			e.log.Error("detector stopped", "error", err)
-		}
+		routers.Wait()
+		pipelines.Wait()
+		close(events)
 	}()
 
 	var workers sync.WaitGroup
@@ -125,7 +147,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			e.work(ctx, events, sinkIn)
+			e.work(runCtx, events, sinkIn)
 		}()
 	}
 
@@ -133,20 +155,25 @@ func (e *Engine) Run(ctx context.Context) error {
 	sinkDone.Add(1)
 	go func() {
 		defer sinkDone.Done()
-		e.drainSink(ctx, sinkIn)
+		e.drainSink(runCtx, sinkIn)
 	}()
 
-	producers.Wait()
 	workers.Wait()
 	close(sinkIn)
 	sinkDone.Wait()
 	return nil
 }
 
-// feed keeps the ring current and forwards lines to the detector. Sending to
-// the detector applies backpressure to the source, which is what bounds memory.
-func (e *Engine) feed(ctx context.Context, in <-chan source.Line, out chan<- source.Line) {
-	defer close(out)
+// route fans one source's lines into per-label streams, keeping each label's
+// ring current. A source that ends closes only the streams it created.
+func (e *Engine) route(ctx context.Context, in <-chan source.Line, events chan<- detect.Event, pipelines *sync.WaitGroup) {
+	var owned []*stream
+	defer func() {
+		for _, st := range owned {
+			close(st.in)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -155,14 +182,59 @@ func (e *Engine) feed(ctx context.Context, in <-chan source.Line, out chan<- sou
 			if !ok {
 				return
 			}
-			e.ring.Add(line)
+			st, created := e.streamFor(ctx, line.Source, events, pipelines)
+			if created {
+				owned = append(owned, st)
+			}
+			st.ring.Add(line)
 			select {
-			case out <- line:
+			case st.in <- line:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}
+}
+
+// streamFor returns the pipeline for a label, creating and starting it on first
+// sight. The ring outlasts the longest possible block plus its context on
+// either side, or preceding lines would be evicted before the curator reads
+// them.
+func (e *Engine) streamFor(ctx context.Context, label string, events chan<- detect.Event, pipelines *sync.WaitGroup) (*stream, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if st, ok := e.streams[label]; ok {
+		return st, false
+	}
+
+	capacity := e.maxBlockLines + e.contextBefore + e.contextAfter + 128
+	if capacity < defaultBuffer {
+		capacity = defaultBuffer
+	}
+	ring := cctx.NewRing(capacity)
+	st := &stream{
+		ring:     ring,
+		curator:  cctx.New(e.contextBefore, e.contextBudget, ring),
+		detector: detect.New(e.contextAfter, e.maxBlockLines),
+		in:       make(chan source.Line, e.buffer),
+	}
+	e.streams[label] = st
+
+	pipelines.Add(1)
+	go func() {
+		defer pipelines.Done()
+		if err := st.detector.Detect(ctx, st.in, events); err != nil {
+			e.log.Error("detector stopped", "label", label, "error", err)
+		}
+	}()
+	return st, true
+}
+
+func (e *Engine) stream(label string) *stream {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.streams[label]
 }
 
 func (e *Engine) work(ctx context.Context, events <-chan detect.Event, out chan<- sink.Result) {
@@ -180,22 +252,26 @@ func (e *Engine) work(ctx context.Context, events <-chan detect.Event, out chan<
 }
 
 func (e *Engine) handle(ctx context.Context, event detect.Event, out chan<- sink.Result) {
-	curation := e.curator.Build(event)
+	label := event.Trigger.Source
+	st := e.stream(label)
+	if st == nil {
+		return
+	}
+	curation := st.curator.Build(event)
 	fp := fingerprint.Of(event.Kind, curation.Block)
-	sourceName := event.Trigger.Source
 
-	inc, due := e.tracker.Observe(fp.Hash, event.Kind, sourceName, time.Now())
+	inc, due := e.tracker.Observe(label, fp.Hash, event.Kind, time.Now())
 	if due {
 		explanation, err := e.backend.Explain(ctx, backend.Request{
 			Kind:        event.Kind,
-			Source:      sourceName,
+			Source:      label,
 			Excerpt:     curation.Excerpt,
 			Fingerprint: fp.Hash,
 		})
 		if err != nil {
-			inc = e.tracker.RecordExplanation(fp.Hash, nil, e.backend.Name(), err.Error())
+			inc = e.tracker.RecordExplanation(label, fp.Hash, nil, e.backend.Name(), err.Error())
 		} else {
-			inc = e.tracker.RecordExplanation(fp.Hash, &explanation, e.backend.Name(), "")
+			inc = e.tracker.RecordExplanation(label, fp.Hash, &explanation, e.backend.Name(), "")
 		}
 	}
 

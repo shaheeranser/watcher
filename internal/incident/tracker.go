@@ -7,33 +7,42 @@ import (
 	"github.com/shaheeranser/watcher/internal/backend"
 )
 
+// key identifies an incident. The label is part of the key, not the fingerprint
+// hash, so the same crash text on two sources stays two incidents while
+// milestone 01's fingerprints remain unchanged.
+type key struct {
+	label       string
+	fingerprint string
+}
+
 // Tracker is the process-local incident table. It is safe for concurrent use
 // because a backend pool may observe several fingerprints at once.
 type Tracker struct {
 	mu        sync.Mutex
 	window    time.Duration
-	incidents map[string]*Incident
+	incidents map[key]*Incident
 }
 
 // NewTracker builds a tracker whose explanation window is the minimum interval
-// between model calls for one fingerprint. A zero window explains every
+// between model calls for one incident. A zero window explains every
 // occurrence.
 func NewTracker(window time.Duration) *Tracker {
-	return &Tracker{window: window, incidents: make(map[string]*Incident)}
+	return &Tracker{window: window, incidents: make(map[key]*Incident)}
 }
 
-// Observe records one occurrence and reports whether a fresh explanation is
-// due. When it is, the window is started right away so that a second observer
-// looking at the same fingerprint does not also decide to call the model
-// (CORE-FP-6).
-func (t *Tracker) Observe(fingerprint, kind, source string, now time.Time) (Incident, bool) {
+// Observe records one occurrence of a (label, fingerprint) crash and reports
+// whether a fresh explanation is due. When it is, the window is started right
+// away so that a second observer looking at the same incident does not also
+// decide to call the model (CORE-FP-6).
+func (t *Tracker) Observe(label, fingerprint, kind string, now time.Time) (Incident, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	inc, ok := t.incidents[fingerprint]
+	k := key{label: label, fingerprint: fingerprint}
+	inc, ok := t.incidents[k]
 	if !ok {
-		inc = &Incident{Fingerprint: fingerprint, Kind: kind, Source: source, FirstSeen: now}
-		t.incidents[fingerprint] = inc
+		inc = &Incident{Fingerprint: fingerprint, Kind: kind, Source: label, FirstSeen: now}
+		t.incidents[k] = inc
 	}
 	inc.Count++
 	inc.LastSeen = now
@@ -47,11 +56,11 @@ func (t *Tracker) Observe(fingerprint, kind, source string, now time.Time) (Inci
 
 // RecordExplanation stores the outcome of an explanation attempt, successful or
 // not, so later occurrences can reuse it, and returns the updated incident.
-func (t *Tracker) RecordExplanation(fingerprint string, expl *backend.Explanation, model, explainErr string) Incident {
+func (t *Tracker) RecordExplanation(label, fingerprint string, expl *backend.Explanation, model, explainErr string) Incident {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	inc, ok := t.incidents[fingerprint]
+	inc, ok := t.incidents[key{label: label, fingerprint: fingerprint}]
 	if !ok {
 		return Incident{}
 	}
