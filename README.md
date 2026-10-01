@@ -29,21 +29,36 @@ ollama pull <model>
 ### Watch stdin
 
 ```sh
-tail -f app.log | ./bin/watcher
+tail -f app.log | ./bin/watcher run
 ```
 
 ### Watch a single file
 
 ```sh
-./bin/watcher --file /var/log/app.log
+./bin/watcher run --file /var/log/app.log
 ```
+
+`run` is the daemon entry point; the bare form (`watcher --file …`) is an alias
+that keeps earlier invocations working. One instance can watch several labeled
+sources at once, and the label is what a report attributes a crash to:
+
+```sh
+./bin/watcher run \
+  --source backend=/var/log/backend.log \
+  --source worker=/var/log/worker.log
+```
+
+Inside a Docker Compose deployment, `watcher run` with no source configured
+attaches to its own project's sibling containers by default (over the Docker
+socket); `--containers project=NAME`, `label=K=V`, `name=NAME`, or `service=NAME`
+selects a scope explicitly, and `--containers none` disables it.
 
 When stdout is a terminal the results are rendered for humans. When it is not,
 Watcher emits one JSON object per line, so a pipe or a redirect gives you a
 machine-readable incident stream:
 
 ```sh
-./bin/watcher --file /var/log/app.log > incidents.jsonl
+./bin/watcher run --file /var/log/app.log > incidents.jsonl
 ```
 
 ## Configuration
@@ -54,6 +69,16 @@ winning when both are present (flag > environment > default).
 | Setting | Flag | Env | Default |
 |---|---|---|---|
 | Source file | `--file` | `WATCHER_FILE` | stdin |
+| Labeled sources | `--source LABEL=PATH` | `WATCHER_SOURCES` | — |
+| Docker scope | `--containers` | `WATCHER_CONTAINERS` | own Compose project |
+| Docker socket | `--docker-host` | `WATCHER_DOCKER_HOST` | `unix:///var/run/docker.sock` |
+| Docker lookback | `--docker-since` | `WATCHER_DOCKER_SINCE` | `0s` |
+| Webhook URL | `--webhook-url` | `WATCHER_WEBHOOK_URL` | *(disabled)* |
+| Webhook format | `--webhook-format` | `WATCHER_WEBHOOK_FORMAT` | `generic` |
+| Webhook retries | `--webhook-retries` | `WATCHER_WEBHOOK_RETRIES` | `5` |
+| Webhook backoff base / cap | `--webhook-backoff-base` / `-max` | `WATCHER_WEBHOOK_BACKOFF_BASE` / `_MAX` | `1s` / `30s` |
+| Webhook fallback file | `--webhook-fallback` | `WATCHER_WEBHOOK_FALLBACK` | `undelivered.jsonl` |
+| Notification throttle | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | `15m` |
 | Ollama base URL | `--ollama-url` | `WATCHER_OLLAMA_URL` | `http://localhost:11434` |
 | Model | `--model` | `WATCHER_MODEL` | *(required)* |
 | Preceding context lines (N) | `--context-before` | `WATCHER_CONTEXT_BEFORE` | `20` |
@@ -104,8 +129,9 @@ flowchart LR
     backend -->|structured explanation| sinks
 ```
 
-- **Source** — produces log lines. stdin and a single tailed file locally;
-  Docker container streams in production.
+- **Source** — produces log lines, each tagged with an operator-assigned label:
+  one or more files, stdin, or the sibling containers of Watcher's own Compose
+  project (streamed over the Docker socket).
 - **Detector** — matches crash/error patterns (Go panics, Python tracebacks,
   generic `FATAL`/`Exception` lines) and assembles the multi-line block.
 - **Backend** — sends a bounded, curated excerpt to Ollama and returns
@@ -124,11 +150,15 @@ live count, not one alert per occurrence).
 - [x] `00` — Scaffolding (repository hygiene)
 - [x] `01` — Core engine (stdin/file source, detector, fingerprinting, context
       curation, Ollama backend, guardrail, output)
-- [ ] `02` — Production shape (Docker source, Compose packaging, incident state
-      machine, webhook sink, heartbeat)
+- [x] `01b` — Runtime (run verb, labeled multi-source incl. Docker container
+      logs, webhook sink)
+- [ ] `02` — Production shape (Compose packaging, incident state machine,
+      heartbeat)
 - [ ] `03` — Dashboard (headless daemon, read API, `watcher attach` TUI, SQLite
       history)
 - [ ] `04` — Evaluation (ground-truth scoring, pass/fail tally)
+- [ ] `05` — Install lifecycle (installer, `watcher onboard`, config file,
+      systemd unit)
 
 Detailed design documentation for each milestone lives in
 [`specs/`](./specs), which is committed and public: `requirements.md` (testable
@@ -153,7 +183,7 @@ The harness scores Watcher by pointing its `evaluate.py` at Watcher's output —
 a captured JSON Lines file or a URL — so the two repos share no code:
 
 ```sh
-./bin/watcher --file victim.log --model <model> > results.jsonl
+./bin/watcher run --file victim.log --model <model> > results.jsonl
 ./evaluate.py --watcher results.jsonl --runs 5 --report reports/latest.md
 ```
 
@@ -163,6 +193,35 @@ payload works too) and finds `likely_cause` in each record. In-repo scoring
 [`specs/04-evaluation/design.md`](./specs/04-evaluation/design.md) §7 but is not
 implemented yet; until it is, the harness scores with its own script. See
 `docs/victim/` for per-run notes on the harness.
+
+### Live procedure
+
+The harness recreates its `victim-api` container on every scenario, so a piped
+`docker compose logs -f | watcher` stream dies with the container. Running
+Watcher against the harness's **Compose project** — and letting it follow
+container logs over the Docker socket — survives that recreation, because it
+reattaches as containers start and stop.
+
+```sh
+# 1. Bring the harness up and reset it.
+cd watcher_victim && ./break.sh reset
+
+# 2. In one terminal, run Watcher against the harness's Compose project (the
+#    project name defaults to the directory name) and capture its JSON Lines.
+/path/to/bin/watcher run --containers project=watcher_victim \
+  --model <model> --ollama-url http://localhost:11434 \
+  > /tmp/watcher-victim.jsonl
+
+# 3. In another terminal, trigger each scenario and score the result.
+./evaluate.py --watcher /tmp/watcher-victim.jsonl --runs 3 --report reports/latest.md
+```
+
+If Watcher itself runs as a container in that Compose project, plain
+`watcher run` with no `--containers` attaches to the project's siblings by
+default, so no selector is needed. Expected result: a per-scenario PASS/FAIL
+table and a pass rate, with each incident line carrying a `likely_cause` the
+scorer reads. The same output can be pushed to Slack/Discord by adding
+`--webhook-url` and `--webhook-format`.
 
 ## Contributing
 
