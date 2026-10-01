@@ -1,0 +1,16 @@
+{
+  "event": "incident",
+  "kind": "generic-fatal",
+  "source": "/var/log/app.log",
+  "fingerprint": "def456",
+  "severity": "unknown",
+  "count": 1,
+  "first_seen": "2026-01-02T03:04:05Z",
+  "last_seen": "2026-01-02T03:04:05Z",
+  "summary": "",
+  "likely_cause": "",
+  "suggested_fix": "",
+  "confidence": null,
+  "model": "",
+  "explanation_unavailable": true
+}

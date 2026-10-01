@@ -1,0 +1,9 @@
+{
+  "content": "[HIGH] go-panic on backend — nil pointer dereference",
+  "embeds": [
+    {
+      "description": "event: incident\ndetector: go-panic\nsource: backend\nfingerprint: abc123\nseverity: high\ncount: 3\nfirst_seen: 2026-01-02T03:04:05Z\nlast_seen: 2026-01-02T03:05:05Z\nsummary: nil pointer dereference\nlikely_cause: the handler dereferenced a nil request\nsuggested_fix: guard the nil check\nconfidence: 0.80\nmodel: qwen2.5-coder:0.5b\nevidence:\n  - \"panic: boom\"",
+      "title": "[HIGH] go-panic on backend"
+    }
+  ]
+}

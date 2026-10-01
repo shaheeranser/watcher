@@ -1,0 +1,16 @@
+{
+  "event": "incident",
+  "kind": "go-panic",
+  "source": "backend",
+  "fingerprint": "abc123",
+  "severity": "high",
+  "count": 3,
+  "first_seen": "2026-01-02T03:04:05Z",
+  "last_seen": "2026-01-02T03:05:05Z",
+  "summary": "nil pointer dereference",
+  "likely_cause": "the handler dereferenced a nil request",
+  "suggested_fix": "guard the nil check",
+  "confidence": 0.8,
+  "model": "qwen2.5-coder:0.5b",
+  "explanation_unavailable": false
+}
