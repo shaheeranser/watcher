@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/shaheeranser/watcher/internal/config"
 )
 
 type spyDaemon struct {
@@ -95,6 +97,64 @@ func TestBadConfigurationExitsWithCode2(t *testing.T) {
 	}
 	if code := runDaemon(nil); code != 2 {
 		t.Errorf("missing model exit = %d, want 2", code)
+	}
+}
+
+func TestUseDockerDecision(t *testing.T) {
+	tests := []struct {
+		name       string
+		cfg        config.Config
+		configured int
+		want       bool
+	}{
+		{
+			name: "explicitly disabled",
+			cfg:  config.Config{Containers: config.ContainersDisabled, ContainersSet: true},
+			want: false,
+		},
+		{
+			name:       "explicit selector applies alongside other sources",
+			cfg:        config.Config{Containers: "project=shop", ContainersSet: true},
+			configured: 2,
+			want:       true,
+		},
+		{
+			name: "the default applies when nothing else is configured",
+			cfg:  config.Config{},
+			want: true,
+		},
+		{
+			name:       "an explicit source wins over the default",
+			cfg:        config.Config{},
+			configured: 1,
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := useDocker(tt.cfg, tt.configured); got != tt.want {
+				t.Errorf("useDocker = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfiguredSourcesCarryLabels(t *testing.T) {
+	fromFile := configuredSources(config.Config{File: "/var/log/app.log"}, nil)
+	if len(fromFile) != 1 || fromFile[0].Name() != "/var/log/app.log" {
+		t.Errorf("file shorthand sources = %+v, want one named after the path", fromFile)
+	}
+
+	fromSpecs := configuredSources(config.Config{Sources: []config.SourceSpec{
+		{Label: "backend", Path: "/var/log/backend.log"},
+		{Label: "worker", Path: "-"},
+	}}, nil)
+	if len(fromSpecs) != 2 {
+		t.Fatalf("sources = %d, want 2", len(fromSpecs))
+	}
+	if fromSpecs[0].Name() != "backend" || fromSpecs[1].Name() != "worker" {
+		t.Errorf("labels = %q, %q, want backend, worker", fromSpecs[0].Name(), fromSpecs[1].Name())
 	}
 }
 

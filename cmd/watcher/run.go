@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/shaheeranser/watcher/internal/backend"
@@ -15,10 +16,12 @@ import (
 	"github.com/shaheeranser/watcher/internal/engine"
 	"github.com/shaheeranser/watcher/internal/guard"
 	"github.com/shaheeranser/watcher/internal/sink"
+	"github.com/shaheeranser/watcher/internal/sink/webhook"
 	"github.com/shaheeranser/watcher/internal/source"
+	"github.com/shaheeranser/watcher/internal/source/docker"
 )
 
-const usage = `watcher explains application crashes from a log stream.
+const usage = `watcher explains application crashes from one or more log sources.
 
 Usage:
   watcher run [flags]              start the daemon (the long-running process)
@@ -28,14 +31,25 @@ Usage:
 Verbs:
   run                              read the configured sources and report crashes
 
-Sources:
-  watcher run                      read stdin (unless a Docker project is detected)
-  watcher run --file /var/log/app.log
-  watcher run --source backend=/var/log/backend.log --source worker=-
+Sources (repeatable; a lone file reads its path as its label, stdin is "stdin"):
+  watcher run                                 stdin, or the Compose project when in one
+  watcher run --file /var/log/app.log         one file
+  watcher run --source backend=/var/log/app.log --source worker=-
+  watcher run --containers project=shop       a Compose project's containers
 
 Flags (environment variable in parentheses):
-  --file PATH             single log file to tail, shorthand for one source (WATCHER_FILE)
+  --file PATH             single log file, shorthand for one source (WATCHER_FILE)
   --source LABEL=PATH     labeled source, repeatable; PATH '-' is stdin (WATCHER_SOURCES)
+  --containers SELECTOR   Docker scope: project=, label=, name=, service=, or 'none' (WATCHER_CONTAINERS)
+  --docker-host HOST      Docker Engine host (WATCHER_DOCKER_HOST; default unix:///var/run/docker.sock)
+  --docker-since DUR      existing container-log lookback (WATCHER_DOCKER_SINCE; default 0s)
+  --webhook-url URL       notification webhook; empty disables it (WATCHER_WEBHOOK_URL)
+  --webhook-format F      generic, slack, or discord (WATCHER_WEBHOOK_FORMAT; default generic)
+  --webhook-retries N     delivery attempts before the fallback (WATCHER_WEBHOOK_RETRIES; default 5)
+  --webhook-backoff-base D  first retry delay (WATCHER_WEBHOOK_BACKOFF_BASE; default 1s)
+  --webhook-backoff-max D   retry delay cap (WATCHER_WEBHOOK_BACKOFF_MAX; default 30s)
+  --webhook-fallback PATH   file for undeliverable notifications (WATCHER_WEBHOOK_FALLBACK; default undelivered.jsonl)
+  --throttle-window DUR   min interval between notifications per incident (WATCHER_THROTTLE_WINDOW; default 15m)
   --model NAME            Ollama model to use (WATCHER_MODEL; required)
   --ollama-url URL        Ollama base URL (WATCHER_OLLAMA_URL; default http://localhost:11434)
   --context-before N      context lines before a crash (WATCHER_CONTEXT_BEFORE; default 20)
@@ -63,7 +77,14 @@ func runDaemon(args []string) int {
 		return 2
 	}
 
-	sources := buildSources(cfg, logger)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	sources, err := buildSources(cfg, logger)
+	if err != nil {
+		logger.Error("cannot start sources", "error", err)
+		return 1
+	}
 	for _, src := range sources {
 		if self, reason := guard.IsSelf(src); self {
 			logger.Error("refusing to watch Watcher's own output", "source", src.Name(), "reason", reason)
@@ -71,10 +92,19 @@ func runDaemon(args []string) int {
 		}
 	}
 
+	isTerminal := sink.IsTerminal(os.Stdout)
+	sinks, err := buildSinks(ctx, cfg, isTerminal, logger)
+	if err != nil {
+		logger.Error("cannot start sinks", "error", err)
+		return 1
+	}
+
+	logStartup(logger, cfg, sources, isTerminal)
+
 	eng := engine.New(engine.Options{
 		Sources:       sources,
 		Backend:       backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout),
-		Sink:          sink.New(os.Stdout, sink.IsTerminal(os.Stdout)),
+		Sink:          sinks,
 		Logger:        logger,
 		ContextBefore: cfg.ContextBefore,
 		ContextAfter:  cfg.ContextAfter,
@@ -84,9 +114,6 @@ func runDaemon(args []string) int {
 		ExplainWindow: cfg.ExplainWindow,
 	})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	if err := eng.Run(ctx); err != nil {
 		logger.Error("watcher stopped", "error", err)
 		return 1
@@ -94,14 +121,50 @@ func runDaemon(args []string) int {
 	return 0
 }
 
-// buildSources turns the resolved configuration into streams to watch. With no
-// source configured it reads stdin, which is milestone 01's behaviour.
-func buildSources(cfg config.Config, log *slog.Logger) []source.Source {
-	specs := cfg.ResolvedSources()
-	if len(specs) == 0 {
-		return []source.Source{source.NewStdin(os.Stdin, "", log)}
+// buildSources turns the configuration into the streams to watch. With no
+// source configured it reads stdin, unless Watcher is running in a Compose
+// project, in which case the project's siblings are the documented default.
+func buildSources(cfg config.Config, log *slog.Logger) ([]source.Source, error) {
+	sources := configuredSources(cfg, log)
+
+	if !useDocker(cfg, len(sources)) {
+		if len(sources) == 0 {
+			sources = append(sources, source.NewStdin(os.Stdin, "", log))
+		}
+		return sources, nil
 	}
 
+	d, err := docker.New(cfg.DockerHost, cfg.Containers, cfg.DockerSince, log)
+	if err != nil {
+		// An explicit request must not be silently downgraded; the auto default
+		// falls back to stdin so a bare-metal run never requires Docker.
+		if cfg.ContainersSet {
+			return nil, err
+		}
+		log.Warn("docker source unavailable; reading stdin", "error", err)
+		if len(sources) == 0 {
+			sources = append(sources, source.NewStdin(os.Stdin, "", log))
+		}
+		return sources, nil
+	}
+	return append(sources, d), nil
+}
+
+// useDocker decides whether a Docker source belongs in this run. An explicit
+// --containers always is (unless disabled); otherwise the default only applies
+// when no other source is configured, so an explicit source wins outright.
+func useDocker(cfg config.Config, configuredSources int) bool {
+	if cfg.Containers == config.ContainersDisabled {
+		return false
+	}
+	if cfg.ContainersSet {
+		return true
+	}
+	return configuredSources == 0
+}
+
+func configuredSources(cfg config.Config, log *slog.Logger) []source.Source {
+	specs := cfg.ResolvedSources()
 	sources := make([]source.Source, 0, len(specs))
 	for _, spec := range specs {
 		label := spec.EffectiveLabel()
@@ -112,4 +175,55 @@ func buildSources(cfg config.Config, log *slog.Logger) []source.Source {
 		sources = append(sources, source.NewFile(spec.Path, label, cfg.FromStart, log))
 	}
 	return sources
+}
+
+// buildSinks assembles the terminal/JSON Lines sink and, when configured, the
+// webhook sink, fanning out so one failing sink cannot suppress the others.
+func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *slog.Logger) (sink.Sink, error) {
+	sinks := []sink.Sink{sink.New(os.Stdout, isTerminal)}
+	if cfg.WebhookURL != "" {
+		webhooks, err := webhook.New(ctx, webhook.Options{
+			URL:            cfg.WebhookURL,
+			Provider:       cfg.WebhookFormat,
+			Retries:        cfg.WebhookRetries,
+			BackoffBase:    cfg.WebhookBackoffBase,
+			BackoffMax:     cfg.WebhookBackoffMax,
+			Fallback:       cfg.WebhookFallback,
+			ThrottleWindow: cfg.ThrottleWindow,
+			Logger:         log,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("webhook sink: %w", err)
+		}
+		sinks = append(sinks, webhooks)
+	}
+	if len(sinks) == 1 {
+		return sinks[0], nil
+	}
+	return sink.NewMulti(sinks...), nil
+}
+
+// logStartup reports the sources attached and the sinks configured, so an
+// operator can verify configuration without attaching a UI (RT-CFG-4).
+func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, isTerminal bool) {
+	labels := make([]string, len(sources))
+	for i, src := range sources {
+		labels[i] = src.Name()
+	}
+
+	sinkNames := []string{"jsonl"}
+	if isTerminal {
+		sinkNames[0] = "terminal"
+	}
+	if cfg.WebhookURL != "" {
+		sinkNames = append(sinkNames, "webhook("+cfg.WebhookFormat+")")
+	}
+
+	log.Info("watcher starting",
+		"sources", strings.Join(labels, ", "),
+		"sinks", strings.Join(sinkNames, ", "),
+		"model", cfg.Model,
+		"ollama_url", cfg.OllamaURL,
+		"throttle_window", cfg.ThrottleWindow,
+	)
 }
