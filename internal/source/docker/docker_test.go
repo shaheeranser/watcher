@@ -305,13 +305,13 @@ func TestExplicitProjectSelectorIgnoresOtherProjects(t *testing.T) {
 
 func TestMissingSocketFailsFast(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.sock")
-	if _, err := New("unix://"+missing, "", 0, nil); err == nil {
+	if _, err := New("unix://"+missing, "project=shop", 0, nil); err == nil {
 		t.Fatal("expected a failure for a missing docker socket")
 	}
 }
 
 func TestUnsupportedHostRejected(t *testing.T) {
-	if _, err := New("ssh://docker", "", 0, nil); err == nil {
+	if _, err := New("ssh://docker", "project=shop", 0, nil); err == nil {
 		t.Fatal("expected an unsupported-host error")
 	}
 }

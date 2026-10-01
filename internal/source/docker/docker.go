@@ -48,24 +48,31 @@ type Docker struct {
 // Compose project. It never fails a run that does not request Docker, because
 // the caller only calls New when it wants the source.
 func New(host, selectorRaw string, since time.Duration, log *slog.Logger) (*Docker, error) {
-	client, err := NewClient(host)
-	if err != nil {
-		return nil, err
-	}
-
 	log = loggerOrDiscard(log)
-	ctx, cancel := context.WithTimeout(context.Background(), socketTimeout)
-	defer cancel()
-	if err := client.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("docker socket unreachable: %w", err)
-	}
 
 	selector, err := ParseSelector(selectorRaw)
 	if err != nil {
 		return nil, err
 	}
 
+	// The default scope needs Watcher's own container; outside one there is no
+	// Compose project to attach to, and the caller falls back to stdin.
 	selfID, _ := selfContainerID()
+	if selector.OwnProject() && selfID == "" {
+		return nil, ErrNotInComposeProject
+	}
+
+	client, err := NewClient(host)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), socketTimeout)
+	defer cancel()
+	if err := client.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("docker socket unreachable: %w", err)
+	}
+
 	if selector.OwnProject() {
 		project, err := ownProject(ctx, client, selfID)
 		if err != nil {
