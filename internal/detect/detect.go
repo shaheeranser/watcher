@@ -18,6 +18,12 @@ const (
 	KindGenericFatal    = "generic-fatal"
 )
 
+// defaultIdle is how long a finished block waits for following context before
+// it is emitted anyway. Without it a crash that is the last line on a source
+// that never ends (a tailed file, a Docker container) would be held until the
+// source produced something else.
+const defaultIdle = time.Second
+
 // Event is one detected crash: the line that triggered it, the full block that
 // belongs to it, and a few following lines the context curator may use.
 type Event struct {
@@ -38,6 +44,7 @@ type Detector interface {
 type detector struct {
 	tailLines     int
 	maxBlockLines int
+	idle          time.Duration
 	now           func() time.Time
 }
 
@@ -47,6 +54,7 @@ func New(tailLines, maxBlockLines int) *detector {
 	return &detector{
 		tailLines:     tailLines,
 		maxBlockLines: maxBlockLines,
+		idle:          defaultIdle,
 		now:           time.Now,
 	}
 }
@@ -55,6 +63,23 @@ func (d *detector) Name() string { return "patterns" }
 
 func (d *detector) Detect(ctx context.Context, in <-chan source.Line, out chan<- Event) error {
 	c := newCollector(d.tailLines, d.maxBlockLines, d.now)
+	timer := time.NewTimer(d.idle)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+
+	// rearm keeps the idle timer running only while a finished block is waiting
+	// for its tail: each following line postpones the flush, and a block still
+	// being collected needs no timer.
+	rearm := func() {
+		if c.state == stateTail {
+			resetTimer(timer, d.idle)
+			return
+		}
+		stopTimer(timer)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -69,6 +94,33 @@ func (d *detector) Detect(ctx context.Context, in <-chan source.Line, out chan<-
 				}
 				return err
 			}
+			rearm()
+		case <-timer.C:
+			if err := c.flushIdle(ctx, out); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
+			}
+		}
+	}
+}
+
+func resetTimer(timer *time.Timer, d time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(d)
+}
+
+func stopTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
 	}
 }

@@ -141,6 +141,17 @@ func (c *collector) flush(ctx context.Context, out chan<- Event) error {
 	return c.emit(ctx, out)
 }
 
+// flushIdle emits a block whose tail has gone quiet, so a crash that is the
+// last line on a source that never ends is still reported rather than held
+// forever. It applies only to the tail state: a block that is still being
+// collected is left alone, because a trigger line may still be arriving.
+func (c *collector) flushIdle(ctx context.Context, out chan<- Event) error {
+	if c.state != stateTail {
+		return nil
+	}
+	return c.emit(ctx, out)
+}
+
 func (c *collector) emit(ctx context.Context, out chan<- Event) error {
 	c.event.Block = c.block()
 	event := c.event

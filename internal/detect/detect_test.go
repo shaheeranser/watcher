@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaheeranser/watcher/internal/source"
 )
@@ -176,4 +177,106 @@ func TestDetectStopsOnCancellation(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("Detect returned %v, want nil on cancellation", err)
 	}
+}
+
+func TestIdleFlushEmitsBlockWhenStreamGoesQuiet(t *testing.T) {
+	d := New(10, 200)
+	d.idle = 20 * time.Millisecond
+
+	in := make(chan source.Line, 8)
+	out := make(chan Event, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Detect(ctx, in, out) }()
+
+	for _, raw := range []string{"panic: boom", "goroutine 1 [running]:", "\t/app/main.go:10 +0x1a", "exit status 2"} {
+		in <- source.Line{Raw: raw, Source: "test"}
+	}
+	// The stream stays open and quiet, as a tailed file or container log does.
+	select {
+	case event := <-out:
+		if event.Kind != KindGoPanic {
+			t.Errorf("Kind = %q, want %q", event.Kind, KindGoPanic)
+		}
+		if event.Trigger.Raw != "panic: boom" {
+			t.Errorf("Trigger = %q", event.Trigger.Raw)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a quiet finished block must be flushed, not held forever")
+	}
+
+	close(in)
+	<-done
+}
+
+func TestIdleFlushIncludesLinesThatArriveBeforeIt(t *testing.T) {
+	d := New(5, 200)
+	d.idle = 40 * time.Millisecond
+
+	in := make(chan source.Line, 8)
+	out := make(chan Event, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Detect(ctx, in, out) }()
+
+	for _, raw := range []string{"panic: boom", "goroutine 1 [running]:", "\t/app/main.go:10 +0x1a", "exit status 2", "post-crash note"} {
+		in <- source.Line{Raw: raw, Source: "test"}
+	}
+
+	select {
+	case event := <-out:
+		found := false
+		for _, line := range event.Tail {
+			if line.Raw == "post-crash note" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("tail = %v, want it to include the line that arrived before the idle flush", event.Tail)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the flushed block")
+	}
+
+	close(in)
+	<-done
+}
+
+func TestIdleFlushDoesNotInterruptAnActiveBlock(t *testing.T) {
+	d := New(5, 200)
+	d.idle = 20 * time.Millisecond
+
+	in := make(chan source.Line, 8)
+	out := make(chan Event, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- d.Detect(ctx, in, out) }()
+
+	// A crash block that never reaches its terminator, then silence: the flush
+	// must not fire mid-block.
+	for _, raw := range []string{"panic: boom", "goroutine 1 [running]:", "\t/app/main.go:10 +0x1a"} {
+		in <- source.Line{Raw: raw, Source: "test"}
+	}
+	select {
+	case event := <-out:
+		t.Fatalf("a block being collected must not be flushed early: %+v", event)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// Now the terminator arrives and the block completes normally.
+	in <- source.Line{Raw: "exit status 2", Source: "test"}
+	select {
+	case event := <-out:
+		if event.Kind != KindGoPanic {
+			t.Errorf("Kind = %q", event.Kind)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("completing the block must emit it")
+	}
+
+	close(in)
+	<-done
 }

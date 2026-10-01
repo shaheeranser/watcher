@@ -326,6 +326,17 @@ Called out so the change is deliberate, not accidental:
 4. **The zero-arg default changes only inside a Compose container** (§4.2);
    everywhere else it remains stdin.
 5. **The fingerprint hash is unchanged**, so 01's tests and fixtures stay valid.
+6. **The detector gains a bounded idle flush.** In 01 a finished block was held
+   until `context-after` following lines arrived or the source ended, so a crash
+   that was the last line on a source that never ends (a tailed file, a Docker
+   container) was not reported until more output appeared — potentially never.
+   Now, once a block has ended and its tail is still short, a short idle timer
+   (~1s) emits it with whatever following context arrived. Lines that keep
+   arriving postpone the flush, so the model still gets following context in the
+   common case, and a block that is still being collected is never flushed
+   early. This is a deliberate change to 01's detector, made because
+   "push, not pull" is the product's core property; it does not affect the
+   fingerprint or the block content.
 
 ## 12. Decisions
 
