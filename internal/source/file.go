@@ -17,18 +17,24 @@ const (
 
 // File tails a single log file. By default it starts at the current end so a
 // restart does not replay history (CORE-SRC-2); it reopens automatically when
-// the file is truncated or replaced by a rotation (CORE-SRC-3).
+// the file is truncated or replaced by a rotation (CORE-SRC-3). The label
+// attributes its lines and defaults to the path.
 type File struct {
 	path         string
+	label        string
 	fromStart    bool
 	pollInterval time.Duration
 	bufSize      int
 	log          *slog.Logger
 }
 
-func NewFile(path string, fromStart bool, log *slog.Logger) *File {
+func NewFile(path, label string, fromStart bool, log *slog.Logger) *File {
+	if label == "" {
+		label = path
+	}
 	return &File{
 		path:         path,
+		label:        label,
 		fromStart:    fromStart,
 		pollInterval: filePollInterval,
 		bufSize:      defaultBuffer,
@@ -36,7 +42,7 @@ func NewFile(path string, fromStart bool, log *slog.Logger) *File {
 	}
 }
 
-func (f *File) Name() string { return f.path }
+func (f *File) Name() string { return f.label }
 
 // Path exposes the watched file so the self-watch guard can identify it.
 func (f *File) Path() string { return f.path }
@@ -119,7 +125,7 @@ func (f *File) follow(ctx context.Context, file *os.File, acc *lineAccumulator, 
 		setReadDeadline(file, f.pollInterval)
 		lines, err := acc.read()
 		for _, raw := range lines {
-			if !sendLine(ctx, out, Line{Raw: raw, Source: f.path, ArrivedAt: time.Now()}) {
+			if !sendLine(ctx, out, Line{Raw: raw, Source: f.label, ArrivedAt: time.Now()}) {
 				return followStopped
 			}
 		}

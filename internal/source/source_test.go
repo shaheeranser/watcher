@@ -56,7 +56,7 @@ func TestStdinStreamsBeforeEOF(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, err := NewStdin(r, nil).Stream(ctx)
+	ch, err := NewStdin(r, "", nil).Stream(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestStdinStreamsBeforeEOF(t *testing.T) {
 
 func TestStdinVeryLongLineIsNotTruncated(t *testing.T) {
 	long := strings.Repeat("x", 100*1024)
-	ch, err := NewStdin(strings.NewReader(long+"\n"), nil).Stream(context.Background())
+	ch, err := NewStdin(strings.NewReader(long+"\n"), "", nil).Stream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestStdinVeryLongLineIsNotTruncated(t *testing.T) {
 }
 
 func TestStdinFlushesFinalLineWithoutNewline(t *testing.T) {
-	ch, err := NewStdin(strings.NewReader("no trailing newline"), nil).Stream(context.Background())
+	ch, err := NewStdin(strings.NewReader("no trailing newline"), "", nil).Stream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestStdinFlushesFinalLineWithoutNewline(t *testing.T) {
 }
 
 func TestStdinStripsCarriageReturns(t *testing.T) {
-	ch, err := NewStdin(strings.NewReader("a\r\nb\r\n"), nil).Stream(context.Background())
+	ch, err := NewStdin(strings.NewReader("a\r\nb\r\n"), "", nil).Stream(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestStdinStopsOnCancellation(t *testing.T) {
 	defer w.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	ch, err := NewStdin(r, nil).Stream(ctx)
+	ch, err := NewStdin(r, "", nil).Stream(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestFileStartsAtEndByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFile(path, false, nil)
+	f := NewFile(path, "", false, nil)
 	f.pollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -161,7 +161,7 @@ func TestFileCanStartFromBeginning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFile(path, true, nil)
+	f := NewFile(path, "", true, nil)
 	f.pollInterval = 10 * time.Millisecond
 	ch, err := f.Stream(context.Background())
 	if err != nil {
@@ -179,7 +179,7 @@ func TestFileFollowsRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFile(path, false, nil)
+	f := NewFile(path, "", false, nil)
 	f.pollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,7 +204,7 @@ func TestFileFollowsRotation(t *testing.T) {
 func TestFileWaitsForLateAppearance(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "later.log")
 
-	f := NewFile(path, true, nil)
+	f := NewFile(path, "", true, nil)
 	f.pollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -228,7 +228,7 @@ func TestFileStopsOnCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := NewFile(path, true, nil)
+	f := NewFile(path, "", true, nil)
 	f.pollInterval = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	ch, err := f.Stream(ctx)
@@ -241,8 +241,46 @@ func TestFileStopsOnCancellation(t *testing.T) {
 }
 
 func TestFileRejectsEmptyPath(t *testing.T) {
-	if _, err := NewFile("", false, nil).Stream(context.Background()); err == nil {
+	if _, err := NewFile("", "", false, nil).Stream(context.Background()); err == nil {
 		t.Fatal("expected an error for an empty path")
+	}
+}
+
+func TestStdinCarriesLabel(t *testing.T) {
+	ch, err := NewStdin(strings.NewReader("hello\n"), "backend", nil).Stream(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := recv(t, ch)
+	if line.Source != "backend" {
+		t.Errorf("Source = %q, want backend", line.Source)
+	}
+	if got := NewStdin(strings.NewReader(""), "", nil).Name(); got != "stdin" {
+		t.Errorf("default stdin name = %q, want stdin", got)
+	}
+}
+
+func TestFileCarriesLabelAndDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(path, []byte("crash\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := NewFile(path, "", true, nil).Name(); got != path {
+		t.Errorf("default file name = %q, want the path %q", got, path)
+	}
+
+	f := NewFile(path, "worker", true, nil)
+	f.pollInterval = 10 * time.Millisecond
+	if f.Name() != "worker" || f.Path() != path {
+		t.Fatalf("Name/Path = %q/%q, want worker/%q", f.Name(), f.Path(), path)
+	}
+	ch, err := f.Stream(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recv(t, ch).Source; got != "worker" {
+		t.Errorf("Source = %q, want worker", got)
 	}
 }
 

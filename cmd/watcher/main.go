@@ -62,9 +62,9 @@ func run() int {
 
 	var src source.Source
 	if cfg.File == "" {
-		src = source.NewStdin(os.Stdin, logger)
+		src = source.NewStdin(os.Stdin, "", logger)
 	} else {
-		src = source.NewFile(cfg.File, cfg.FromStart, logger)
+		src = source.NewFile(cfg.File, "", cfg.FromStart, logger)
 	}
 
 	if self, reason := guard.IsSelf(src); self {

@@ -14,18 +14,23 @@ import (
 const stdinPollInterval = 250 * time.Millisecond
 
 // Stdin streams lines from a reader assumed to be standard input. Because the
-// reader is injected, tests can drive it without touching the real stdin.
+// reader is injected, tests can drive it without touching the real stdin. The
+// label is what attributes every line to this source; it defaults to "stdin".
 type Stdin struct {
 	r       io.Reader
+	label   string
 	bufSize int
 	log     *slog.Logger
 }
 
-func NewStdin(r io.Reader, log *slog.Logger) *Stdin {
-	return &Stdin{r: r, bufSize: defaultBuffer, log: loggerOrDiscard(log)}
+func NewStdin(r io.Reader, label string, log *slog.Logger) *Stdin {
+	if label == "" {
+		label = "stdin"
+	}
+	return &Stdin{r: r, label: label, bufSize: defaultBuffer, log: loggerOrDiscard(log)}
 }
 
-func (s *Stdin) Name() string { return "stdin" }
+func (s *Stdin) Name() string { return s.label }
 
 // Stream emits each line as soon as it is read, without waiting for EOF
 // (CORE-SRC-1). The final unterminated line is flushed at EOF, since a closed
@@ -42,7 +47,7 @@ func (s *Stdin) Stream(ctx context.Context) (<-chan Line, error) {
 			setReadDeadline(s.r, stdinPollInterval)
 			lines, err := acc.read()
 			for _, raw := range lines {
-				if !sendLine(ctx, out, Line{Raw: raw, Source: "stdin", ArrivedAt: time.Now()}) {
+				if !sendLine(ctx, out, Line{Raw: raw, Source: s.label, ArrivedAt: time.Now()}) {
 					return
 				}
 			}
@@ -51,7 +56,7 @@ func (s *Stdin) Stream(ctx context.Context) (<-chan Line, error) {
 			case err == nil:
 			case errors.Is(err, io.EOF):
 				if raw, ok := acc.takePending(); ok {
-					sendLine(ctx, out, Line{Raw: raw, Source: "stdin", ArrivedAt: time.Now()})
+					sendLine(ctx, out, Line{Raw: raw, Source: s.label, ArrivedAt: time.Now()})
 				}
 				return
 			case errors.Is(err, os.ErrDeadlineExceeded):
