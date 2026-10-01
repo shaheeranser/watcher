@@ -4,10 +4,10 @@ Requirements: [`requirements.md`](./requirements.md). Tasks:
 [`tasks.md`](./tasks.md).
 
 Dependencies: builds on `../01-core-engine/design.md` (pipeline, `Result`
-type, config precedence) and `../02-production-shape/design.md` (incident
-state machine, notification kinds, container sources). It consumes the
-tracker's outputs; it does not change detection, fingerprinting, context
-curation, or the backend.
+type, config precedence), `../01b-runtime/design.md` (the `run` verb and
+labeled sources), and `../02-production-shape/design.md` (incident state
+machine, notification kinds). It consumes the tracker's outputs; it does not
+change detection, fingerprinting, context curation, or the backend.
 
 ## 1. The central design decision: always headless
 
