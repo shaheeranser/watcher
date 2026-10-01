@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,12 @@ import (
 // IsSelf reports whether src is Watcher's own output, and why. A caller must
 // treat a positive result as fatal (CORE-GRD-2).
 func IsSelf(src source.Source) (bool, string) {
+	if cs, ok := src.(interface{ ContainerID() string }); ok {
+		if self, reason := IsSelfContainer(cs.ContainerID()); self {
+			return true, reason
+		}
+	}
+
 	pathSource, ok := src.(interface{ Path() string })
 	if !ok || pathSource.Path() == "" {
 		return false, ""
@@ -112,4 +119,65 @@ func onlySelf(pids []int) bool {
 		}
 	}
 	return true
+}
+
+// containerIDPattern matches a full Docker container id as it appears in a
+// cgroup path.
+var containerIDPattern = regexp.MustCompile(`\b[0-9a-f]{64}\b`)
+
+// SelfContainerID resolves Watcher's own container id when it runs inside a
+// container: from the cgroup path first, then from the hostname (Docker sets it
+// to the short id). It reports false outside a container, which is what keeps
+// a bare-metal run from treating itself as a container.
+func SelfContainerID() (string, bool) {
+	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
+		if id := containerIDPattern.FindString(string(data)); id != "" {
+			return id, true
+		}
+	}
+	if host, err := os.Hostname(); err == nil && looksLikeContainerID(host) {
+		return host, true
+	}
+	return "", false
+}
+
+// IsSelfContainer reports whether id names Watcher's own container. It is the
+// container-identity arm of the self-watch guard (RT-DOCK-7): a container-log
+// source calls it to refuse to attach to Watcher itself.
+func IsSelfContainer(id string) (bool, string) {
+	if id == "" {
+		return false, ""
+	}
+	self, ok := SelfContainerID()
+	if !ok {
+		return false, ""
+	}
+	if SameContainer(self, id) {
+		return true, "container is Watcher's own container"
+	}
+	return false, ""
+}
+
+func looksLikeContainerID(s string) bool {
+	if len(s) < 12 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// SameContainer compares ids that may differ in truncation: Docker accepts a
+// 12-character short id for a 64-character one.
+func SameContainer(a, b string) bool {
+	if len(a) < 12 || len(b) < 12 {
+		return false
+	}
+	if len(a) < len(b) {
+		a, b = b, a
+	}
+	return strings.HasPrefix(a, b)
 }
