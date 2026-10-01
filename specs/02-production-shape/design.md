@@ -3,81 +3,28 @@
 Requirements: [`requirements.md`](./requirements.md). Tasks:
 [`tasks.md`](./tasks.md).
 
-Dependencies: builds on `../01-core-engine/design.md` — the `Source`,
-`Detector`, `Backend`, `Sink` interfaces, the `Result` type, the pipeline
-wiring, and the config precedence model. This milestone adds implementations
-and one new intervening component (the incident state machine); it does not
-change the core interfaces' shape.
+Dependencies: builds on `../01b-runtime/design.md` — the `run` verb and verb
+grammar, the labeled multi-source engine, the Docker container-log source, and
+the webhook sink — which in turn build on
+`../01-core-engine/design.md` (the four interfaces, the `Result` type, the
+pipeline wiring, config precedence). This milestone adds packaging, the
+notification state machine, and the heartbeat; it changes no core interface.
 
-## 1. What changes relative to milestone 01
+## 1. What changes relative to 01b
 
-| Area | Milestone 01 | This milestone |
-|------|--------------|----------------|
-| Sources | stdin, single file | + Docker container streams (multi-source) |
-| Sink | terminal, JSONL | + webhook, + notification kinds |
-| Incident tracking | counts + explanation window | + `new`/`ongoing`/`resolved` state machine |
+| Area | 01b | This milestone |
+|------|-----|----------------|
+| Sources | stdin/file/docker, labeled | unchanged |
+| Sink | terminal, JSONL, webhook + minimal throttle | + notification kinds, state-machine gating |
+| Incident tracking | counts + explanation window + throttle | + `new`/`ongoing`/`resolved` state machine |
 | Packaging | single binary | + Compose stack with Ollama |
 | Visibility | stderr diagnostics | + heartbeat |
 
-The pipeline in `../01-core-engine/design.md` §2 is unchanged; the tracker
-gains notification decisions and the sink fan-out gains kinds.
+The pipeline is unchanged. The tracker gains notification *policy*, and the
+webhook sink's minimal throttle (01b §5.3) is superseded by the state machine
+(PROD-STM-9).
 
-## 2. Docker source
-
-### 2.1 API surface used
-
-Over the Unix socket (`unix:///var/run/docker.sock`), Watcher uses:
-
-- `GET /containers/json?filters=…` — initial set of containers matching the
-  selector.
-- `GET /containers/{id}/logs?follow=1&stdout=1&stderr=1&since=<lookback>` —
-  the log stream per container.
-- `GET /events?filters={"type":["container"],"event":["start","die","stop","restart"]}`
-  — a single long-lived stream used to attach/detach sources as containers come
-  and go (PROD-SRC-4, PROD-SRC-5).
-- `GET /containers/{id}/json` — to learn whether the container is TTY, which
-  determines the stream framing (PROD-SRC-2).
-
-Authorization is the socket's filesystem permissions; no API version
-negotiation beyond the `Docker-Daemon-Version` header is required.
-
-### 2.2 Stream framing
-
-Non-TTY container streams are multiplexed. Each frame is:
-
-```
-+--------+--------+--------+--------+--------+--------+--------+--------+
-| stream |  0x00  |  0x00  |  0x00  |        payload length (BE u32)     |
-+--------+--------+--------+--------+--------+--------+--------+--------+
-|                          payload bytes …                              |
-```
-
-`stream == 1` is stdout, `stream == 2` is stderr. The reader:
-
-1. Reads the 8-byte header, then exactly `length` payload bytes.
-2. Appends payload to a per-stream partial-line buffer.
-3. Emits a `Line` on each `\n`, keeping the trailing fragment buffered
-   (PROD-SRC-2).
-
-TTY containers send raw bytes with no framing; the reader then treats the
-whole stream as one line source.
-
-### 2.3 Lifecycle
-
-A supervisor goroutine owns a map of `containerID → cancel func`. On
-`start`/`restart` it attaches a stream; on `die`/`stop` it cancels. Attachment
-failures are retried with backoff (PROD-NFR-3). The supervisor is the only
-component that talks to Docker, so socket errors are handled in one place.
-
-### 2.4 Self-exclusion
-
-`guard.IsSelf` (milestone 01) is extended: the container identity hook now
-resolves Watcher's own container ID from `/proc/self/cgroup` or the hostname,
-and the supervisor refuses to attach to it (PROD-SRC-7). On Compose, the
-`watcher` service simply is not in its own selector set by default, but the
-guard is enforced regardless of configuration.
-
-## 3. Compose packaging
+## 2. Compose packaging
 
 ```yaml
 services:
@@ -112,7 +59,7 @@ services:
       WATCHER_OLLAMA_URL: "http://ollama:11434"
       WATCHER_MODEL: "${WATCHER_MODEL}"
       WATCHER_WEBHOOK_URL: "${WATCHER_WEBHOOK_URL:-}"
-      WATCHER_WEBHOOK_FORMAT: "${WATCHER_WEBHOOK_FORMAT:-slack}"
+      WATCHER_WEBHOOK_FORMAT: "${WATCHER_WEBHOOK_FORMAT:-discord}"
       WATCHER_HEARTBEAT_URL: "${WATCHER_HEARTBEAT_URL:-}"
     restart: unless-stopped
 
@@ -122,6 +69,12 @@ volumes:
 
 Design notes:
 
+- The `watcher` image's entrypoint is `watcher run` (01b's verb). Compose
+  supplies the whole configuration through environment variables, so no
+  onboarding or config file is involved in the container shape.
+- Watcher attaches to **its own Compose project's** siblings by default
+  (01b RT-DOCK-2), which is why the socket is mounted and no `--containers`
+  selector is required for the common case.
 - Model auto-pull (PROD-PKG-3) is a one-shot `ollama-init` service rather than
   logic inside `watcher`, keeping the daemon's startup simple and letting the
   pull be retried independently.
@@ -131,9 +84,9 @@ Design notes:
 - The socket is mounted read-only (PROD-PKG-5): Watcher only reads logs and
   events.
 
-## 4. Incident state machine
+## 3. Incident state machine
 
-### 4.1 States and transitions
+### 3.1 States and transitions
 
 ```mermaid
 stateDiagram-v2
@@ -158,7 +111,12 @@ stateDiagram-v2
 - After `Resolved`, a further occurrence restarts the cycle at `New`
   (PROD-STM-4), so a genuinely recurring problem is not permanently silenced.
 
-### 4.2 Why a separate component
+The throttle window `T` is the same setting 01b introduced for its minimal
+throttle (`--throttle-window`); this milestone gives it its real meaning. Once
+the state machine is active, the standalone throttle no longer gates delivery
+(PROD-STM-9).
+
+### 3.2 Why a separate component
 
 The state machine is `internal/incident`'s notification decision layer,
 sitting between the tracker's counting and the sinks. This keeps the tracker
@@ -167,7 +125,7 @@ answers "should we tell anyone right now"). It also means the milestone-03
 TUI, which only needs counts and history, does not have to reason about
 throttling.
 
-### 4.3 Restart semantics
+### 3.3 Restart semantics
 
 State is process-local in this milestone, so on restart the memory of
 fingerprints is lost. The rule that falls out (PROD-STM-7): the resolve ticker
@@ -176,7 +134,7 @@ a spurious `resolved` burst for incidents that existed only in the previous
 process. Those fingerprints are simply encountered fresh and produce a `new`
 notification, which is the honest behavior for a stateless restart.
 
-### 4.4 Pending explanations
+### 3.4 Pending explanations
 
 If the fingerprint is new, the explanation is still in flight when the `new`
 notification fires (the model call is asynchronous by design, milestone 01
@@ -185,95 +143,7 @@ notification fires (the model call is asynchronous by design, milestone 01
 null/placeholder. This protects the push-not-pull property: notification
 latency is never a function of model latency.
 
-## 5. Webhook sink
-
-### 5.1 Fan-out and gating
-
-`internal/sink` gains a `webhook` implementation and a multiplexer:
-
-```go
-type Multiplexer struct{ sinks []Sink }
-// Emit fans out to every sink independently; errors are aggregated and
-// logged, never returned in a way that stops the others.
-```
-
-Delivery is gated by the state machine: `Result` gains a `NotificationKind`
-(`new` | `ongoing` | `resolved`), and the webhook sink only receives results
-the state machine has decided to emit (PROD-WH-3).
-
-### 5.2 Payload shapes
-
-**Slack-shaped** (PROD-WH-2), for a Slack incoming webhook or any compatible
-endpoint:
-
-```json
-{
-  "text": ":rotating_light: New crash detected — go-panic (severity: high, source: web-1)",
-  "blocks": [
-    {"type": "header",
-     "text": {"type": "plain_text", "text": "New crash — go-panic"}},
-    {"type": "section",
-     "fields": [
-       {"type": "mrkdwn", "text": "*Source:*\nweb-1"},
-       {"type": "mrkdwn", "text": "*Severity:*\nhigh"},
-       {"type": "mrkdwn", "text": "*Count:*\n1"},
-       {"type": "mrkdwn", "text": "*Confidence:*\n0.72"}
-     ]},
-    {"type": "section",
-     "text": {"type": "mrkdwn", "text": "*Likely cause*\n<…>"}},
-    {"type": "section",
-     "text": {"type": "mrkdwn", "text": "*Suggested fix*\n<…>"}},
-    {"type": "context",
-     "elements": [{"type": "mrkdwn",
-       "text": "fingerprint `a1b2c3d4e5f6a7b8` · first 15:04:05Z · last 15:06:11Z"}]}
-  ]
-}
-```
-
-**Generic JSON** (PROD-WH-2), for arbitrary receivers:
-
-```json
-{
-  "schema_version": 1,
-  "event": "ongoing",
-  "fingerprint": "a1b2c3d4e5f6a7b8",
-  "kind": "go-panic",
-  "source": "docker:web-1",
-  "severity": "high",
-  "count": 12,
-  "first_seen": "2026-01-02T15:04:05Z",
-  "last_seen": "2026-01-02T15:06:11Z",
-  "summary": "…",
-  "likely_cause": "…",
-  "suggested_fix": "…",
-  "confidence": 0.72,
-  "explanation_pending": false,
-  "model": "…"
-}
-```
-
-Both shapes truncate any field sourced from log text to a configured maximum
-(PROD-WH-9); the truncation is marked with an ellipsis so receivers know text
-was clipped.
-
-### 5.3 Retry, backoff, fallback
-
-- Retries: `delay = min(maxDelay, base * 2^(attempt-1))`, with jitter
-  multiplying by a random factor in `[0.5, 1.0]` (PROD-WH-4).
-- Success = HTTP 2xx. Anything else (including 3xx and 429 with no
-  `Retry-After`) is a failure.
-- After the final attempt, the notification is appended as one JSON line to
-  the fallback file, together with the last error and attempt count
-  (PROD-WH-5). Writing to the fallback file is itself best-effort; if it also
-  fails, a counter is logged to stderr.
-- The sink writes to a bounded queue consumed by a delivery goroutine
-  (PROD-WH-6). When the queue is full, the oldest pending notification is
-  dropped and a dropped counter is logged — this is the documented drop policy,
-  chosen so a wedged webhook cannot stall detection.
-- The fallback file is a plain JSONL spool. Draining/replaying it is not
-  automated in this milestone; that is flagged as an open decision (OD-02-5).
-
-## 6. Heartbeat
+## 4. Heartbeat
 
 `internal/heartbeat` runs its own ticker (PROD-HB-3), independent of incident
 traffic, so that Watcher's *silence* is itself detectable by a dead-man's-
@@ -299,53 +169,43 @@ Payload:
 }
 ```
 
-## 7. Configuration added in this milestone
+## 5. Configuration added in this milestone
 
 | Setting | Flag | Env | Default |
 |---------|------|-----|---------|
-| Docker container selectors | `--containers` | `WATCHER_CONTAINERS` | none (disabled) |
-| Docker socket | `--docker-host` | `WATCHER_DOCKER_HOST` | `unix:///var/run/docker.sock` |
-| Docker lookback | `--docker-since` | `WATCHER_DOCKER_SINCE` | *OD-02-8* |
-| Webhook URL | `--webhook-url` | `WATCHER_WEBHOOK_URL` | none |
-| Webhook format | `--webhook-format` | `WATCHER_WEBHOOK_FORMAT` | `slack` |
-| Webhook retries | `--webhook-retries` | `WATCHER_WEBHOOK_RETRIES` | *OD-02-4* |
-| Webhook backoff base / cap | `--webhook-backoff-base` / `--webhook-backoff-max` | `WATCHER_WEBHOOK_BACKOFF_BASE` / `_MAX` | *OD-02-4* |
-| Fallback file | `--webhook-fallback` | `WATCHER_WEBHOOK_FALLBACK` | *OD-02-5* |
-| Throttle window T | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | *OD-02-1* |
+| Throttle window T (given its real meaning) | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | *OD-02-1* |
 | Resolve window W | `--resolve-window` | `WATCHER_RESOLVE_WINDOW` | *OD-02-2* |
 | Heartbeat URL | `--heartbeat-url` | `WATCHER_HEARTBEAT_URL` | none |
 | Heartbeat interval | `--heartbeat-interval` | `WATCHER_HEARTBEAT_INTERVAL` | *OD-02-3* |
 
-## 8. Failure modes
+`--throttle-window` was introduced in 01b (`RT-CFG-1`); this milestone is
+where it stops being a stop-gap and becomes the state machine's `T`.
+
+## 6. Failure modes
 
 | Failure | Behavior |
 |---------|----------|
-| Docker socket permission denied | Fatal at startup, clear diagnostic, non-zero exit |
-| Container stream drops mid-read | Reconnect with backoff; keep other containers running |
-| Webhook 5xx repeatedly | Retries with backoff, then fallback file |
-| Webhook queue saturated | Drop-oldest with logged counter; detection unaffected |
 | Ollama down | Incident still notified with `explanation_pending` |
 | Heartbeat endpoint down | Log, skip, continue; next ping is the signal |
 | Clock skew across containers | Timestamps come from Watcher's own clock, never from container logs |
+| Notification queue saturated | 01b's drop-oldest policy applies; detection unaffected |
 
-## 9. Testing strategy
+Docker-source and webhook-delivery failure modes are 01b's (see
+`../01b-runtime/design.md` §8) and are unchanged here.
 
-- **Docker framing** — unit tests over synthetic multiplexed byte streams,
-  including frames split mid-line and stderr/stdout interleaving.
-- **Docker lifecycle** — a fake Docker API (`httptest` + unix socket listener)
-  emitting `start`/`die` events; assert attach/detach.
+## 7. Testing strategy
+
 - **State machine** — table-driven tests with an injectable clock covering:
   first occurrence, suppressed repeats, throttled `ongoing`, `resolved`,
   recurrence after resolve, and restart-without-spurious-resolve.
-- **Webhook** — `httptest` receiver asserting payload shape for both formats;
-  failure injection for retry/backoff timing (with a fake clock); fallback-file
-  contents after exhaustion.
 - **Heartbeat** — fake clock + `httptest`; assert cadence independence from
   incident traffic.
+- **Packaging** — brought up locally: the stack reaches healthy with the model
+  auto-pulled, and detection continues with Ollama stopped.
 - **Integration** — Compose locally: a crash-looping test container plus a
   receiver; assert one `new`, throttled `ongoing`, and a final `resolved`.
 
-## 10. Open decisions
+## 8. Open decisions
 
 - **OD-02-1** — Default throttle window `T` (how often "still happening" pings
   a crash loop). Too short defeats dedup; too long hides escalation.
@@ -354,19 +214,13 @@ Payload:
 - **OD-02-3** — Default heartbeat interval, and whether the default heartbeat
   payload shape should match a specific dead-man's-switch provider or stay
   generic.
-- **OD-02-4** — Webhook retry count, backoff base, and cap.
-- **OD-02-5** — Fallback file path, and whether undelivered notifications
-  should ever be replayed (and if so, when).
-- **OD-02-6** — Docker client dependency: the official Docker SDK (correct,
-  heavy) versus a hand-rolled minimal client over the socket (lighter, more
-  code to own).
-- **OD-02-7** — Whether a `resolved` notification should be suppressed when the
+- **OD-02-4** — Whether a `resolved` notification should be suppressed when the
   incident never had a successful explanation.
-- **OD-02-8** — Docker lookback window default on startup.
-- **OD-02-9** — Whether counts reset when an incident reopens after `resolved`,
+- **OD-02-5** — Whether counts reset when an incident reopens after `resolved`,
   or continue cumulatively across cycles.
-- **OD-02-10** — Container selector syntax (`--containers name=a,b`,
-  `label=app=web`, or a filter JSON string).
-- **OD-02-11** — Whether `resolved` should be emitted for incidents that were
-  never explained (ties to OD-02-7) and whether "no explanation" impacts
-  severity reported to receivers.
+
+Moved to `../01b-runtime/design.md` §12 with their mechanisms: the Docker client
+dependency choice (was OD-02-6), the Docker lookback default (was OD-02-8), the
+container selector syntax (was OD-02-10), and the webhook retry/backoff,
+fallback path, and resolved-without-explanation questions (were OD-02-4,
+OD-02-5, OD-02-11).

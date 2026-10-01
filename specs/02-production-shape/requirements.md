@@ -2,62 +2,38 @@
 
 ## 1. Purpose
 
-Turn the local-only core engine into something that runs unattended in a real
-deployment: read logs from Docker containers, ship as a Compose stack with
-Ollama, notify without spamming when something crash-loops, and make
-Watcher's own failure visible.
+Turn the runnable daemon into something that deploys and behaves well
+unattended: ship as a Compose stack with Ollama, stop spamming an operator when
+something crash-loops, and make Watcher's own failure visible.
+
+This milestone builds on `../01b-runtime/requirements.md`. The Docker
+container-log source and the webhook sink it used to own now live in **01b**;
+this milestone consumes them and adds the *policy* — when a notification is
+worth sending — plus packaging and a heartbeat.
 
 ## 2. Scope
 
 **In scope**
 
-- A Docker container-log `Source` built on the Docker Engine API.
 - Docker Compose packaging of `watcher` + `ollama` with model auto-pull.
 - The incident state machine: `new` / `ongoing` / `resolved` notification
-  lifecycle with throttling.
-- Webhook `Sink` (Slack-shaped and generic JSON) with retry/backoff and a
-  local-file fallback.
+  lifecycle with throttling, replacing 01b's minimal throttle.
 - Heartbeat / dead-man's-switch.
 
-**Out of scope (deferred to later milestones)**
+**Out of scope (deferred)**
 
-- Persistent incident history surviving restarts and the interactive TUI.
-- Scoring against external ground truth.
+- Docker container-log source and webhook sink — **implemented in 01b**.
+- Install, onboarding, config file, and systemd unit — milestone 05.
+- Persistent incident history and the interactive TUI — milestone 03.
+- Scoring against external ground truth — milestone 04.
 
 Requirement IDs use the form `PROD-<AREA>-<n>`. Requirements build on the
-interfaces defined in `../01-core-engine/requirements.md`.
+interfaces defined in `../01-core-engine/requirements.md` and extended by
+`../01b-runtime/requirements.md`.
 
 ## 3. Functional requirements
 
-### 3.1 Docker source
-
-- **PROD-SRC-1** — WHEN configured with one or more container selectors (by
-  name, by label, or "all running"), THE SYSTEM SHALL stream those containers'
-  logs through the Docker Engine API over the Docker socket, without requiring
-  the `docker` CLI binary.
-- **PROD-SRC-2** — WHEN a container's log stream is multiplexed (non-TTY
-  containers), THE SYSTEM SHALL demultiplex it using the Docker frame header
-  format and split frames into individual log lines, carrying partial lines
-  across frame boundaries.
-- **PROD-SRC-3** — THE SYSTEM SHALL preserve the stdout/stderr distinction of
-  each line where the API provides it.
-- **PROD-SRC-4** — WHEN a selected container starts or restarts after Watcher
-  has begun running, THE SYSTEM SHALL begin streaming its logs without operator
-  intervention.
-- **PROD-SRC-5** — WHEN a selected container stops, THE SYSTEM SHALL end that
-  stream and continue serving the remaining containers.
-- **PROD-SRC-6** — THE SYSTEM SHALL tag every line with a container identity
-  (name and short ID) usable as the incident `source` field.
-- **PROD-SRC-7** — THE SYSTEM SHALL NOT stream logs from its own container,
-  extending the milestone-01 guardrail to container identity.
-- **PROD-SRC-8** — WHEN the Docker socket is missing, inaccessible, or
-  returns an authorization error, THE SYSTEM SHALL fail at startup with a clear
-  stderr diagnostic and a non-zero exit, rather than idling silently.
-- **PROD-SRC-9** — THE SYSTEM SHALL support a configurable lookback window so
-  that, on startup, it may begin from a bounded amount of existing container
-  log text rather than only from new output.
-
-### 3.2 Docker Compose packaging
+### 3.1 Docker Compose packaging
 
 - **PROD-PKG-1** — The repository SHALL ship a Docker Compose file defining a
   `watcher` service and an `ollama` service on a shared network.
@@ -76,7 +52,7 @@ interfaces defined in `../01-core-engine/requirements.md`.
   failure, and SHALL continue to operate (detecting and reporting) when the
   model backend is temporarily unavailable.
 
-### 3.3 Incident state machine
+### 3.2 Incident state machine
 
 - **PROD-STM-1** — WHEN a fingerprint is observed for the first time, THE
   SYSTEM SHALL emit a `new` notification immediately, attaching the explanation
@@ -99,35 +75,11 @@ interfaces defined in `../01-core-engine/requirements.md`.
 - **PROD-STM-8** — WHEN an explanation is still in flight at notification time,
   THE SYSTEM SHALL emit the notification with an explicit pending marker rather
   than waiting indefinitely for the model.
+- **PROD-STM-9** — This state machine SHALL replace 01b's minimal
+  per-incident notification throttle; once it is active, that throttle SHALL no
+  longer gate delivery independently.
 
-### 3.4 Webhook sink
-
-- **PROD-WH-1** — THE SYSTEM SHALL deliver notifications to a configurable
-  HTTP(S) webhook URL.
-- **PROD-WH-2** — THE SYSTEM SHALL support two payload shapes, selectable by
-  configuration: a Slack incoming-webhook-compatible payload, and a generic
-  JSON payload.
-- **PROD-WH-3** — Webhook delivery SHALL be gated by the state machine: only
-  `new`, `ongoing`, and `resolved` notifications are delivered.
-- **PROD-WH-4** — WHEN a delivery attempt fails (non-2xx, timeout, connection
-  error), THE SYSTEM SHALL retry with exponential backoff up to a configured
-  maximum number of attempts.
-- **PROD-WH-5** — WHEN delivery still fails after the final attempt, THE SYSTEM
-  SHALL write the notification to a local fallback file (one JSON object per
-  line, including the failure reason) and continue running.
-- **PROD-WH-6** — Webhook delivery SHALL NOT block the detection pipeline; it
-  SHALL use a bounded queue with a documented drop policy.
-- **PROD-WH-7** — Every payload SHALL contain at least: event kind, fingerprint,
-  detector kind, source, severity, count, first-seen, last-seen, summary,
-  likely cause, suggested fix, and confidence — with unavailable explanation
-  fields represented explicitly rather than omitted silently.
-- **PROD-WH-8** — WHEN multiple sinks are configured, THE SYSTEM SHALL fan out
-  each notification to every sink independently, so one failing sink does not
-  suppress delivery to the others.
-- **PROD-WH-9** — THE SYSTEM SHALL cap the length of log-derived text placed in
-  payloads so a very long line cannot produce an undeliverable request body.
-
-### 3.5 Heartbeat
+### 3.3 Heartbeat
 
 - **PROD-HB-1** — WHEN a heartbeat URL is configured, THE SYSTEM SHALL send a
   heartbeat to it periodically at a configurable interval.
@@ -144,15 +96,14 @@ interfaces defined in `../01-core-engine/requirements.md`.
 
 - **PROD-NFR-1** — THE SYSTEM SHALL continue detecting and counting incidents
   when the model backend or any sink is unavailable.
-- **PROD-NFR-2** — THE SYSTEM SHALL bound memory for container stream buffers,
-  notification queues, and the fallback path.
-- **PROD-NFR-3** — THE SYSTEM SHALL reconnect to Docker streams after transient
-  socket errors without operator intervention, with backoff.
-- **PROD-NFR-4** — All timings, endpoints, and the model name SHALL be
+- **PROD-NFR-2** — THE SYSTEM SHALL bound memory for the notification queue and
+  the heartbeat path.
+- **PROD-NFR-3** — All timings, endpoints, and the model name SHALL be
   configurable via flags and environment variables, consistent with the
-  precedence documented in `../01-core-engine/design.md` §12.
-- **PROD-NFR-5** — THE SYSTEM SHALL emit startup diagnostics (sources attached,
-  sinks configured, model selected) to stderr so operators can verify
+  precedence documented in `../01-core-engine/design.md` §12 and extended by
+  `../01b-runtime/design.md` §7.
+- **PROD-NFR-4** — THE SYSTEM SHALL emit startup diagnostics (sinks configured,
+  model selected, state-machine windows) to stderr so operators can verify
   configuration without attaching a UI.
 
 ## 5. Traceability
