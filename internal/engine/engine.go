@@ -269,9 +269,9 @@ func (e *Engine) handle(ctx context.Context, event detect.Event, out chan<- sink
 			Fingerprint: fp.Hash,
 		})
 		if err != nil {
-			inc = e.tracker.RecordExplanation(label, fp.Hash, nil, e.backend.Name(), err.Error())
+			inc = e.tracker.RecordExplanation(label, fp.Hash, nil, e.backend.Model(), err.Error())
 		} else {
-			inc = e.tracker.RecordExplanation(label, fp.Hash, &explanation, e.backend.Name(), "")
+			inc = e.tracker.RecordExplanation(label, fp.Hash, &explanation, e.backend.Model(), "")
 		}
 	}
 

@@ -47,6 +47,10 @@ func NewOllama(baseURL, model string, timeout time.Duration, maxTokens int) *Oll
 
 func (o *Ollama) Name() string { return "ollama" }
 
+// Model reports the model this backend was configured with, so a result can
+// record which model produced the explanation rather than the backend kind.
+func (o *Ollama) Model() string { return o.model }
+
 func (o *Ollama) Explain(ctx context.Context, req Request) (Explanation, error) {
 	prompt := buildPrompt(req)
 

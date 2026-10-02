@@ -30,5 +30,10 @@ type Request struct {
 // concurrently up to the pipeline's configured worker limit.
 type Backend interface {
 	Explain(ctx context.Context, req Request) (Explanation, error)
+
+	// Name reports the backend kind (for diagnostics and identity); Model
+	// reports the specific model that produced an explanation, which is what a
+	// result's "model" field carries (CORE-OUT-3).
 	Name() string
+	Model() string
 }

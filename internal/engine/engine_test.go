@@ -68,6 +68,8 @@ type fakeBackend struct {
 
 func (f *fakeBackend) Name() string { return "fake" }
 
+func (f *fakeBackend) Model() string { return "fake-model" }
+
 func (f *fakeBackend) Explain(context.Context, backend.Request) (backend.Explanation, error) {
 	f.mu.Lock()
 	f.calls++
@@ -167,7 +169,7 @@ func TestEndToEndJSONLShape(t *testing.T) {
 	if record["count"].(float64) != 1 {
 		t.Errorf("count = %v, want 1", record["count"])
 	}
-	if record["severity"] != "high" || record["model"] != "fake" {
+	if record["severity"] != "high" || record["model"] != "fake-model" {
 		t.Errorf("unexpected severity/model: %v/%v", record["severity"], record["model"])
 	}
 }

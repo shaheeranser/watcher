@@ -64,6 +64,9 @@ func TestExplainParsesValidResponse(t *testing.T) {
 	if got.Options.NumPredict != 512 {
 		t.Errorf("num_predict = %d, want the configured cap 512", got.Options.NumPredict)
 	}
+	if o.Model() != "test-model" || o.Name() != "ollama" {
+		t.Errorf("Model/Name = %q/%q, want test-model/ollama", o.Model(), o.Name())
+	}
 	if _, ok := got.Format.(map[string]any); !ok {
 		t.Errorf("expected a JSON schema for format, got %T", got.Format)
 	}
