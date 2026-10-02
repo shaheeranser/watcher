@@ -32,6 +32,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	contextBudget := fs.Int("context-budget", cfg.ContextBudget, "excerpt size budget in bytes")
 	workers := fs.Int("workers", cfg.Workers, "concurrent backend workers")
 	ollamaTimeout := fs.Duration("ollama-timeout", cfg.OllamaTimeout, "timeout for a single model request")
+	ollamaMaxTokens := fs.Int("ollama-max-tokens", cfg.OllamaMaxTokens, "maximum tokens the model may generate per request")
 	explainWindow := fs.Duration("explain-window", cfg.ExplainWindow, "minimum interval between explanations of one fingerprint")
 	maxBlockLines := fs.Int("max-block-lines", cfg.MaxBlockLines, "maximum lines kept in a crash block")
 	fromStart := fs.Bool("from-start", cfg.FromStart, "read a file source from the beginning instead of the end")
@@ -62,6 +63,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	cfg.ContextBudget = *contextBudget
 	cfg.Workers = *workers
 	cfg.OllamaTimeout = *ollamaTimeout
+	cfg.OllamaMaxTokens = *ollamaMaxTokens
 	cfg.ExplainWindow = *explainWindow
 	cfg.MaxBlockLines = *maxBlockLines
 	cfg.FromStart = *fromStart
@@ -111,6 +113,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		{"WATCHER_CONTEXT_AFTER", &cfg.ContextAfter},
 		{"WATCHER_CONTEXT_BUDGET", &cfg.ContextBudget},
 		{"WATCHER_WORKERS", &cfg.Workers},
+		{"WATCHER_OLLAMA_MAX_TOKENS", &cfg.OllamaMaxTokens},
 		{"WATCHER_MAX_BLOCK_LINES", &cfg.MaxBlockLines},
 		{"WATCHER_WEBHOOK_RETRIES", &cfg.WebhookRetries},
 	}

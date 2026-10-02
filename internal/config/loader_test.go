@@ -26,7 +26,8 @@ func TestParsePrecedence(t *testing.T) {
 					c.OllamaURL == DefaultOllamaURL &&
 					c.ContextBefore == 20 && c.ContextAfter == 10 &&
 					c.ContextBudget == 8192 && c.Workers == 1 &&
-					c.OllamaTimeout == 60*time.Second && c.ExplainWindow == 15*time.Minute &&
+					c.OllamaTimeout == 60*time.Second && c.OllamaMaxTokens == 512 &&
+					c.ExplainWindow == 15*time.Minute &&
 					c.MaxBlockLines == 200 && !c.FromStart
 			},
 		},
@@ -34,17 +35,19 @@ func TestParsePrecedence(t *testing.T) {
 			name: "environment overrides defaults",
 			args: []string{"--model", "m"},
 			env: map[string]string{
-				"WATCHER_OLLAMA_URL":      "http://ollama:11434",
-				"WATCHER_CONTEXT_BEFORE":  "5",
-				"WATCHER_WORKERS":         "4",
-				"WATCHER_OLLAMA_TIMEOUT":  "5s",
-				"WATCHER_EXPLAIN_WINDOW":  "1m",
-				"WATCHER_FROM_START":      "true",
-				"WATCHER_MAX_BLOCK_LINES": "50",
+				"WATCHER_OLLAMA_URL":        "http://ollama:11434",
+				"WATCHER_CONTEXT_BEFORE":    "5",
+				"WATCHER_WORKERS":           "4",
+				"WATCHER_OLLAMA_TIMEOUT":    "5s",
+				"WATCHER_OLLAMA_MAX_TOKENS": "256",
+				"WATCHER_EXPLAIN_WINDOW":    "1m",
+				"WATCHER_FROM_START":        "true",
+				"WATCHER_MAX_BLOCK_LINES":   "50",
 			},
 			want: func(c Config) bool {
 				return c.OllamaURL == "http://ollama:11434" && c.ContextBefore == 5 &&
 					c.Workers == 4 && c.OllamaTimeout == 5*time.Second &&
+					c.OllamaMaxTokens == 256 &&
 					c.ExplainWindow == time.Minute && c.FromStart && c.MaxBlockLines == 50
 			},
 		},

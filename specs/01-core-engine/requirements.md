@@ -153,6 +153,9 @@ Requirement IDs use the form `CORE-<AREA>-<n>` and are referenced from
   configurable worker pool (default 1), so a single small model is not flooded.
 - **CORE-BE-8** — THE SYSTEM SHALL apply a configurable per-request timeout so a
   hung model call cannot stall the pipeline indefinitely.
+- **CORE-BE-9** — THE SYSTEM SHALL bound the number of tokens the model may
+  generate per request with a configurable cap, so a model that loops cannot
+  generate until the per-request timeout on every attempt.
 
 ### 4.6 Guardrail
 

@@ -80,8 +80,15 @@ type Config struct {
 	// ContextBudget caps the excerpt in bytes.
 	ContextBudget int
 
-	Workers       int
-	OllamaTimeout time.Duration
+	Workers int
+
+	// OllamaTimeout bounds one model request; OllamaMaxTokens bounds how much
+	// the model may generate within it. Both are needed: a small model can loop
+	// and generate indefinitely, so a timeout alone is hit at full length every
+	// retry instead of failing fast (CORE-BE-8, CORE-BE-9).
+	OllamaTimeout   time.Duration
+	OllamaMaxTokens int
+
 	ExplainWindow time.Duration
 	MaxBlockLines int
 
@@ -125,6 +132,7 @@ func Default() Config {
 		ContextBudget:      8192,
 		Workers:            1,
 		OllamaTimeout:      60 * time.Second,
+		OllamaMaxTokens:    512,
 		ExplainWindow:      15 * time.Minute,
 		MaxBlockLines:      200,
 		FromStart:          false,
@@ -174,6 +182,9 @@ func (c Config) Validate() error {
 	}
 	if c.OllamaTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("ollama-timeout must be positive, got %s", c.OllamaTimeout))
+	}
+	if c.OllamaMaxTokens <= 0 {
+		errs = append(errs, fmt.Errorf("ollama-max-tokens must be positive, got %d", c.OllamaMaxTokens))
 	}
 	if c.ExplainWindow < 0 {
 		errs = append(errs, fmt.Errorf("explain-window must not be negative, got %s", c.ExplainWindow))

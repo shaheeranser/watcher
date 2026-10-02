@@ -249,6 +249,11 @@ The excerpt is never normalized — evidence must be quotable verbatim
 
 - Endpoint: `POST {base_url}/api/chat`, `stream: false`,
   `options.temperature: 0` for reproducibility.
+- Generated length is bounded with `options.num_predict` (CORE-BE-9). A small
+  model can enter a degenerate repetition loop and generate until the request
+  times out; without a bound, every retry then runs to the full timeout and
+  yields no explanation, so the timeout alone is not sufficient. The bound is
+  the primary guard, the timeout the backstop.
 - Structured output: use Ollama's `format` field with a JSON schema derived
   from `Explanation`. If the installed Ollama build does not support schema
   constraining, fall back to `format: "json"` plus strict client-side
@@ -278,7 +283,15 @@ Respond with ONLY a JSON object matching this schema:
  "severity": "low"|"medium"|"high"|"critical"}
 
 Rules:
-- Every string in "evidence" MUST be copied verbatim from the excerpt.
+- "summary": one short sentence naming the error.
+- "likely_cause": one or two sentences. Name the failing request, handler, or
+  function; the error as the log states it (for example a TypeError,
+  AttributeError, panic, or heap exhaustion); and the specific field, route,
+  key, or value involved. Reuse the excerpt's own wording for these; do not
+  paraphrase them into different terms.
+- "evidence": at most two short lines copied verbatim from the excerpt.
+- "suggested_fix": one short sentence.
+- Stop as soon as the JSON object is complete. Never repeat a sentence.
 - If the excerpt is insufficient, say so in "summary" and lower "confidence".
   Do not invent details.
 
@@ -350,6 +363,7 @@ struct is populated by `internal/config` and validated at startup.
 | Excerpt byte budget | `--context-budget` | `WATCHER_CONTEXT_BUDGET` | `8192` |
 | Backend workers | `--workers` | `WATCHER_WORKERS` | `1` |
 | Request timeout | `--ollama-timeout` | `WATCHER_OLLAMA_TIMEOUT` | `60s` |
+| Generated-token cap | `--ollama-max-tokens` | `WATCHER_OLLAMA_MAX_TOKENS` | `512` |
 | Explanation window | `--explain-window` | `WATCHER_EXPLAIN_WINDOW` | `15m` |
 | Max block lines | `--max-block-lines` | `WATCHER_MAX_BLOCK_LINES` | `200` |
 | Start file from beginning | `--from-start` | `WATCHER_FROM_START` | `false` |
@@ -362,6 +376,7 @@ struct is populated by `internal/config` and validated at startup.
 | Source file rotated | Reopen at new path/inode, continue |
 | Ollama unreachable | Bounded retry/backoff; emit `explanation unavailable` result |
 | Model returns invalid JSON | Retry up to K; else emit unavailable result |
+| Model loops / never stops | Generated length is capped (`num_predict`); a truncated or unparseable result fails fast instead of consuming the timeout |
 | Evidence not grounded | Drop offending entries; floor confidence |
 | Own output detected | Fatal, stderr diagnostic, non-zero exit |
 | Slow sink | Bounded queue; documented drop policy with a dropped counter logged to stderr |

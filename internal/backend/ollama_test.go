@@ -28,6 +28,7 @@ type received struct {
 	Format  any    `json:"format"`
 	Options struct {
 		Temperature float64 `json:"temperature"`
+		NumPredict  int     `json:"num_predict"`
 	} `json:"options"`
 	Messages []struct {
 		Role    string `json:"role"`
@@ -44,7 +45,7 @@ func TestExplainParsesValidResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "test-model", time.Second)
+	o := NewOllama(srv.URL, "test-model", time.Second, 512)
 	req := Request{Kind: "go-panic", Source: "app.log", Excerpt: "panic: boom\n\t/app/main.go:1 +0x0"}
 	expl, err := o.Explain(context.Background(), req)
 	if err != nil {
@@ -59,6 +60,9 @@ func TestExplainParsesValidResponse(t *testing.T) {
 
 	if got.Model != "test-model" || got.Stream || got.Options.Temperature != 0 {
 		t.Errorf("request shape wrong: %+v", got)
+	}
+	if got.Options.NumPredict != 512 {
+		t.Errorf("num_predict = %d, want the configured cap 512", got.Options.NumPredict)
 	}
 	if _, ok := got.Format.(map[string]any); !ok {
 		t.Errorf("expected a JSON schema for format, got %T", got.Format)
@@ -84,7 +88,7 @@ func TestExplainRetriesMalformedThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "m", time.Second)
+	o := NewOllama(srv.URL, "m", time.Second, 512)
 	o.backoff = time.Millisecond
 	if _, err := o.Explain(context.Background(), Request{Excerpt: "panic: boom"}); err != nil {
 		t.Fatalf("Explain: %v", err)
@@ -105,7 +109,7 @@ func TestExplainGivesUpAfterAttempts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "m", time.Second)
+	o := NewOllama(srv.URL, "m", time.Second, 512)
 	o.backoff = time.Millisecond
 	_, err := o.Explain(context.Background(), Request{Excerpt: "x"})
 	if err == nil {
@@ -127,7 +131,7 @@ func TestExplainRetriesOnServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "m", time.Second)
+	o := NewOllama(srv.URL, "m", time.Second, 512)
 	o.backoff = time.Millisecond
 	if _, err := o.Explain(context.Background(), Request{Excerpt: "x"}); err == nil {
 		t.Fatal("expected an error on repeated 500s")
@@ -144,7 +148,7 @@ func TestExplainTimesOut(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "m", 30*time.Millisecond)
+	o := NewOllama(srv.URL, "m", 30*time.Millisecond, 512)
 	o.backoff = time.Millisecond
 	start := time.Now()
 	if _, err := o.Explain(context.Background(), Request{Excerpt: "x"}); err == nil {
@@ -174,7 +178,7 @@ func TestExplainFallsBackToJSONFormat(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "m", time.Second)
+	o := NewOllama(srv.URL, "m", time.Second, 512)
 	if _, err := o.Explain(context.Background(), Request{Excerpt: "panic: boom"}); err != nil {
 		t.Fatalf("Explain: %v", err)
 	}
@@ -190,7 +194,7 @@ func TestGroundingDropsUngroundedEvidence(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o := NewOllama(srv.URL, "m", time.Second)
+	o := NewOllama(srv.URL, "m", time.Second, 512)
 	expl, err := o.Explain(context.Background(), Request{Excerpt: "panic: boom\n\t/app/main.go:1 +0x0"})
 	if err != nil {
 		t.Fatalf("Explain: %v", err)

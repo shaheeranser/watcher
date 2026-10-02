@@ -57,6 +57,7 @@ Flags (environment variable in parentheses):
   --context-budget BYTES  excerpt size budget (WATCHER_CONTEXT_BUDGET; default 8192)
   --workers N             concurrent model calls (WATCHER_WORKERS; default 1)
   --ollama-timeout DUR    per-request timeout (WATCHER_OLLAMA_TIMEOUT; default 60s)
+  --ollama-max-tokens N   tokens the model may generate per request (WATCHER_OLLAMA_MAX_TOKENS; default 512)
   --explain-window DUR    min interval between explanations of one crash (WATCHER_EXPLAIN_WINDOW; default 15m)
   --max-block-lines N     maximum lines kept per crash block (WATCHER_MAX_BLOCK_LINES; default 200)
   --from-start            read a file from the beginning (WATCHER_FROM_START; default false)
@@ -103,7 +104,7 @@ func runDaemon(args []string) int {
 
 	eng := engine.New(engine.Options{
 		Sources:       sources,
-		Backend:       backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout),
+		Backend:       backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout, cfg.OllamaMaxTokens),
 		Sink:          sinks,
 		Logger:        logger,
 		ContextBefore: cfg.ContextBefore,

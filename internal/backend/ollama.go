@@ -24,18 +24,21 @@ type Ollama struct {
 	baseURL     string
 	model       string
 	timeout     time.Duration
+	maxTokens   int
 	maxAttempts int
 	backoff     time.Duration
 	client      *http.Client
 }
 
 // NewOllama builds a client for the given server and model. timeout bounds each
-// individual request (CORE-BE-8); maxAttempts defaults to three.
-func NewOllama(baseURL, model string, timeout time.Duration) *Ollama {
+// individual request (CORE-BE-8) and maxTokens bounds its generated length
+// (CORE-BE-9); maxAttempts defaults to three.
+func NewOllama(baseURL, model string, timeout time.Duration, maxTokens int) *Ollama {
 	return &Ollama{
 		baseURL:     baseURL,
 		model:       model,
 		timeout:     timeout,
+		maxTokens:   maxTokens,
 		maxAttempts: 3,
 		backoff:     200 * time.Millisecond,
 		client:      &http.Client{},
@@ -75,7 +78,7 @@ func (o *Ollama) call(ctx context.Context, prompt string, format any) (Explanati
 		Stream:   false,
 		Format:   format,
 		Messages: []chatMessage{{Role: "user", Content: prompt}},
-		Options:  chatOptions{Temperature: 0},
+		Options:  chatOptions{Temperature: 0, NumPredict: o.maxTokens},
 	})
 	if err != nil {
 		return Explanation{}, fmt.Errorf("encode request: %w", err)
@@ -148,6 +151,11 @@ type chatMessage struct {
 
 type chatOptions struct {
 	Temperature float64 `json:"temperature"`
+
+	// NumPredict caps how many tokens the model may generate. Without it a
+	// small model can loop and generate until the request times out, which
+	// wastes the whole retry budget (CORE-BE-9).
+	NumPredict int `json:"num_predict"`
 }
 
 type chatResponse struct {

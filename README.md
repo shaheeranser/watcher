@@ -86,6 +86,7 @@ winning when both are present (flag > environment > default).
 | Excerpt byte budget | `--context-budget` | `WATCHER_CONTEXT_BUDGET` | `8192` |
 | Backend workers | `--workers` | `WATCHER_WORKERS` | `1` |
 | Request timeout | `--ollama-timeout` | `WATCHER_OLLAMA_TIMEOUT` | `60s` |
+| Generated-token cap | `--ollama-max-tokens` | `WATCHER_OLLAMA_MAX_TOKENS` | `512` |
 | Explanation window | `--explain-window` | `WATCHER_EXPLAIN_WINDOW` | `15m` |
 | Max block lines | `--max-block-lines` | `WATCHER_MAX_BLOCK_LINES` | `200` |
 | Start file from beginning | `--from-start` | `WATCHER_FROM_START` | `false` |
