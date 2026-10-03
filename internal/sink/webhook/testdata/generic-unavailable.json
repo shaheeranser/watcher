@@ -1,5 +1,5 @@
 {
-  "event": "incident",
+  "event": "ongoing",
   "kind": "generic-fatal",
   "source": "/var/log/app.log",
   "fingerprint": "def456",

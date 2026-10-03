@@ -17,12 +17,13 @@ var update = flag.Bool("update", false, "rewrite golden files")
 
 func fixtureResult() sink.Result {
 	return sink.Result{
-		Fingerprint: "abc123",
-		Kind:        "go-panic",
-		Source:      "backend",
-		Count:       3,
-		FirstSeen:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
-		LastSeen:    time.Date(2026, 1, 2, 3, 5, 5, 0, time.UTC),
+		Fingerprint:  "abc123",
+		Kind:         "go-panic",
+		Source:       "backend",
+		Count:        3,
+		FirstSeen:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		LastSeen:     time.Date(2026, 1, 2, 3, 5, 5, 0, time.UTC),
+		Notification: "ongoing",
 		Explanation: &backend.Explanation{
 			Summary:      "nil pointer dereference",
 			LikelyCause:  "the handler dereferenced a nil request",
@@ -38,13 +39,14 @@ func fixtureResult() sink.Result {
 func unavailableResult() sink.Result {
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	return sink.Result{
-		Fingerprint: "def456",
-		Kind:        "generic-fatal",
-		Source:      "/var/log/app.log",
-		Count:       1,
-		FirstSeen:   base,
-		LastSeen:    base,
-		ExplainErr:  "dial tcp 127.0.0.1:11434: connect: connection refused",
+		Fingerprint:  "def456",
+		Kind:         "generic-fatal",
+		Source:       "/var/log/app.log",
+		Count:        1,
+		FirstSeen:    base,
+		LastSeen:     base,
+		Notification: "ongoing",
+		ExplainErr:   "dial tcp 127.0.0.1:11434: connect: connection refused",
 	}
 }
 
@@ -105,8 +107,17 @@ func TestGenericPayloadCarriesEveryField(t *testing.T) {
 			t.Errorf("generic payload missing %q: %s", key, got)
 		}
 	}
-	if payload["event"] != "incident" {
-		t.Errorf("event = %v, want incident", payload["event"])
+	if payload["event"] != "ongoing" {
+		t.Errorf("event = %v, want the notification kind", payload["event"])
+	}
+}
+
+func TestEventKindFallsBackForPlainResults(t *testing.T) {
+	// A result with no notification kind is the local stream's shape, not a
+	// notification; it should still render as an incident rather than empty.
+	r := sink.Result{Fingerprint: "x", Kind: "go-panic", Source: "stdin", Count: 1}
+	if got := eventKindOf(r); got != "incident" {
+		t.Errorf("eventKindOf = %q, want incident", got)
 	}
 }
 
