@@ -53,6 +53,11 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	resolveWindow := fs.Duration("resolve-window", cfg.ResolveWindow, "quiet period before an incident is announced resolved")
 	heartbeatURL := fs.String("heartbeat-url", cfg.HeartbeatURL, "dead-man's-switch URL; empty disables the heartbeat")
 	heartbeatInterval := fs.Duration("heartbeat-interval", cfg.HeartbeatInterval, "interval between heartbeat pings")
+	api := fs.Bool("api", cfg.APIEnabled, "serve the read API the dashboard attaches to")
+	apiSocket := fs.String("api-socket", cfg.APISocket, "unix socket path for the read API")
+	dbPath := fs.String("db", cfg.DBPath, "SQLite incident history file")
+	retention := fs.Duration("retention", cfg.Retention, "how long incident history is kept; 0 disables the age cap")
+	occurrenceCap := fs.Int("occurrence-cap", cfg.OccurrenceCap, "occurrence rows kept per incident; 0 disables the cap")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
@@ -82,6 +87,11 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	cfg.ResolveWindow = *resolveWindow
 	cfg.HeartbeatURL = *heartbeatURL
 	cfg.HeartbeatInterval = *heartbeatInterval
+	cfg.APIEnabled = *api
+	cfg.APISocket = *apiSocket
+	cfg.DBPath = *dbPath
+	cfg.Retention = *retention
+	cfg.OccurrenceCap = *occurrenceCap
 
 	// A repeatable flag replaces the environment list outright rather than
 	// appending to it, so `--source` keeps the flag > env precedence.
@@ -122,6 +132,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		{"WATCHER_OLLAMA_MAX_TOKENS", &cfg.OllamaMaxTokens},
 		{"WATCHER_MAX_BLOCK_LINES", &cfg.MaxBlockLines},
 		{"WATCHER_WEBHOOK_RETRIES", &cfg.WebhookRetries},
+		{"WATCHER_OCCURRENCE_CAP", &cfg.OccurrenceCap},
 	}
 	for _, e := range ints {
 		v, err := envInt(getenv, e.name, *e.dst)
@@ -143,6 +154,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		{"WATCHER_THROTTLE_WINDOW", &cfg.ThrottleWindow},
 		{"WATCHER_RESOLVE_WINDOW", &cfg.ResolveWindow},
 		{"WATCHER_HEARTBEAT_INTERVAL", &cfg.HeartbeatInterval},
+		{"WATCHER_RETENTION", &cfg.Retention},
 	}
 	for _, e := range durations {
 		v, err := envDuration(getenv, e.name, *e.dst)
@@ -171,12 +183,25 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	if v := getenv("WATCHER_HEARTBEAT_URL"); v != "" {
 		cfg.HeartbeatURL = v
 	}
+	if v := getenv("WATCHER_DB"); v != "" {
+		cfg.DBPath = v
+	}
+	cfg.APISocket = defaultSocket(getenv)
+	if v := getenv("WATCHER_API_SOCKET"); v != "" {
+		cfg.APISocket = v
+	}
 
-	v, err := envBool(getenv, "WATCHER_FROM_START", cfg.FromStart)
+	fromStart, err := envBool(getenv, "WATCHER_FROM_START", cfg.FromStart)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.FromStart = v
+	cfg.FromStart = fromStart
+
+	apiEnabled, err := envBool(getenv, "WATCHER_API", cfg.APIEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.APIEnabled = apiEnabled
 	return cfg, nil
 }
 

@@ -31,6 +31,32 @@ const DefaultResolveWindow = 2 * time.Minute
 // a heartbeat URL is configured.
 const DefaultHeartbeatInterval = 60 * time.Second
 
+// DefaultSocketFallback is the API socket path used when XDG_RUNTIME_DIR is not
+// set. The runtime directory is preferred because its permissions are already
+// per-user, which is the access control the socket relies on (design §2.1).
+const DefaultSocketFallback = "/var/run/watcher.sock"
+
+// DefaultDBPath is the SQLite history file, relative to the working directory.
+// OD-03-4: a deployment that wants a durable state directory sets --db.
+const DefaultDBPath = "watcher.db"
+
+// DefaultRetention is the age after which an incident is dropped. Combined with
+// DefaultOccurrenceCap it bounds the database in both dimensions (OD-03-5).
+const DefaultRetention = 30 * 24 * time.Hour
+
+// DefaultOccurrenceCap is how many occurrence rows are kept per incident. It is
+// the growth chokepoint: occurrences accrue per crash, while incidents and
+// explanations stay small (DASH-25).
+const DefaultOccurrenceCap = 100
+
+// DefaultRefreshInterval is the UI's fallback poll cadence and the bound within
+// which a live change reaches the screen (OD-03-6).
+const DefaultRefreshInterval = 2 * time.Second
+
+// DefaultListFraction is the share of terminal height the incident list pane
+// takes, with the detail pane taking the rest.
+const DefaultListFraction = 0.45
+
 // StdinPath is the pseudo-path that names standard input in a source spec, so a
 // file source and stdin can be configured side by side.
 const StdinPath = "-"
@@ -138,6 +164,19 @@ type Config struct {
 	// a run only pings somewhere when it was asked to.
 	HeartbeatURL      string
 	HeartbeatInterval time.Duration
+
+	// APIEnabled serves the read API the dashboard attaches to; APISocket is
+	// its Unix socket path. Disabling the API leaves detection and notification
+	// untouched (DASH-6).
+	APIEnabled bool
+	APISocket  string
+
+	// DBPath is the SQLite history file. Retention bounds how long an incident
+	// is kept and OccurrenceCap how many occurrence rows per incident; zero
+	// disables either (DASH-25).
+	DBPath        string
+	Retention     time.Duration
+	OccurrenceCap int
 }
 
 // Default returns the compiled-in settings. Model is intentionally empty; see
@@ -164,7 +203,23 @@ func Default() Config {
 		ThrottleWindow:     15 * time.Minute,
 		ResolveWindow:      DefaultResolveWindow,
 		HeartbeatInterval:  DefaultHeartbeatInterval,
+		APIEnabled:         true,
+		APISocket:          DefaultSocketFallback,
+		DBPath:             DefaultDBPath,
+		Retention:          DefaultRetention,
+		OccurrenceCap:      DefaultOccurrenceCap,
 	}
+}
+
+// defaultSocket resolves the API socket path from the environment: the
+// per-user runtime directory when it is set, else the compiled-in fallback.
+// The socket's 0600 mode is the only access control, so the runtime directory's
+// own permissions make it the right default (design §2.1).
+func defaultSocket(getenv func(string) string) string {
+	if dir := getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir + "/watcher.sock"
+	}
+	return DefaultSocketFallback
 }
 
 // ResolvedSources folds the --file shorthand into the labeled source list, so
@@ -226,8 +281,26 @@ func (c Config) Validate() error {
 	}
 	errs = append(errs, c.validateWebhook()...)
 	errs = append(errs, c.validateHeartbeat()...)
+	errs = append(errs, c.validateAPI()...)
 	errs = append(errs, c.validateSources()...)
 	return errors.Join(errs...)
+}
+
+func (c Config) validateAPI() []error {
+	var errs []error
+	if c.APISocket == "" {
+		errs = append(errs, errors.New("api-socket must not be empty"))
+	}
+	if c.DBPath == "" {
+		errs = append(errs, errors.New("db path must not be empty"))
+	}
+	if c.Retention < 0 {
+		errs = append(errs, fmt.Errorf("retention must not be negative, got %s", c.Retention))
+	}
+	if c.OccurrenceCap < 0 {
+		errs = append(errs, fmt.Errorf("occurrence-cap must not be negative, got %d", c.OccurrenceCap))
+	}
+	return errs
 }
 
 func (c Config) validateWebhook() []error {
