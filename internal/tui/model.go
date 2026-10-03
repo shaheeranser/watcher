@@ -17,6 +17,11 @@ type Options struct {
 	Initial      []api.IncidentRow
 	Degraded     bool
 	Now          func() time.Time
+
+	// HistoryUnavailable marks that the daemon could not open its database and
+	// is serving in-memory state, so the UI can say history will not survive a
+	// restart (DASH-26).
+	HistoryUnavailable bool
 }
 
 // Model is the whole dashboard state. Rendering reads only these fields, so
@@ -38,6 +43,7 @@ type Model struct {
 	height       int
 	listFraction float64
 	degraded     bool
+	historyOff   bool
 	styles       styles
 	now          func() time.Time
 }
@@ -57,6 +63,7 @@ func New(opts Options) Model {
 		rows:         sortRows(opts.Initial),
 		listFraction: fraction,
 		degraded:     opts.Degraded,
+		historyOff:   opts.HistoryUnavailable,
 		styles:       newStyles(opts.Degraded),
 		now:          now,
 	}

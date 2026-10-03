@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shaheeranser/watcher/internal/api"
 	"github.com/shaheeranser/watcher/internal/backend"
 	"github.com/shaheeranser/watcher/internal/config"
 	"github.com/shaheeranser/watcher/internal/engine"
@@ -22,6 +23,7 @@ import (
 	"github.com/shaheeranser/watcher/internal/sink/webhook"
 	"github.com/shaheeranser/watcher/internal/source"
 	"github.com/shaheeranser/watcher/internal/source/docker"
+	"github.com/shaheeranser/watcher/internal/store"
 )
 
 const usage = `watcher explains application crashes from one or more log sources.
@@ -29,10 +31,17 @@ const usage = `watcher explains application crashes from one or more log sources
 Usage:
   watcher run [flags]              start the daemon (the long-running process)
   watcher     [flags]              alias for 'watcher run'
+  watcher attach [flags]           attach a live dashboard to a running daemon
   watcher --help                   list the verbs and run's flags
 
 Verbs:
   run                              read the configured sources and report crashes
+  attach                           render a running daemon's incident history
+
+Dashboard:
+  The daemon is always headless and serves a read API over a Unix socket; the
+  'attach' command connects to it and renders a live two-pane view. Incident
+  history is persisted to SQLite so it survives a restart.
 
 Sources (repeatable; a lone file reads its path as its label, stdin is "stdin"):
   watcher run                                 stdin, or the Compose project when in one
@@ -56,6 +65,11 @@ Flags (environment variable in parentheses):
   --resolve-window DUR    quiet period before an incident is reported resolved (WATCHER_RESOLVE_WINDOW; default 2m)
   --heartbeat-url URL     dead-man's-switch URL; empty disables the heartbeat (WATCHER_HEARTBEAT_URL)
   --heartbeat-interval D  interval between heartbeat pings (WATCHER_HEARTBEAT_INTERVAL; default 60s)
+  --api BOOL              serve the read API the dashboard attaches to (WATCHER_API; default true)
+  --api-socket PATH       unix socket path for the read API (WATCHER_API_SOCKET; default $XDG_RUNTIME_DIR/watcher.sock)
+  --db PATH               SQLite incident history file (WATCHER_DB; default watcher.db)
+  --retention DUR         how long incident history is kept (WATCHER_RETENTION; default 720h; 0 disables)
+  --occurrence-cap N      occurrence rows kept per incident (WATCHER_OCCURRENCE_CAP; default 100; 0 disables)
   --model NAME            Ollama model to use (WATCHER_MODEL; required)
   --ollama-url URL        Ollama base URL (WATCHER_OLLAMA_URL; default http://localhost:11434)
   --context-before N      context lines before a crash (WATCHER_CONTEXT_BEFORE; default 20)
@@ -106,12 +120,36 @@ func runDaemon(args []string) int {
 		return 1
 	}
 
-	logStartup(logger, cfg, sources, isTerminal)
+	startedAt := time.Now()
+
+	// History is a projection for the dashboard. It is opened before the engine
+	// so the recorder is ready, but a failure to open it degrades history only:
+	// detection and notification continue (DASH-26).
+	history := openHistory(cfg, logger)
+	storeCtx, storeCancel := context.WithCancel(ctx)
+	var storeDone sync.WaitGroup
+	storeDone.Add(1)
+	go func() {
+		defer storeDone.Done()
+		history.Run(storeCtx)
+	}()
+
+	apiCancel, apiDone, err := startAPI(ctx, cfg, history, logger, startedAt)
+	if err != nil {
+		logger.Error("cannot start the read API", "socket", cfg.APISocket, "error", err)
+		storeCancel()
+		storeDone.Wait()
+		history.Close()
+		return 1
+	}
+
+	logStartup(logger, cfg, sources, isTerminal, history.Persistent())
 
 	opts := engine.Options{
 		Sources:        sources,
 		Backend:        backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout, cfg.OllamaMaxTokens),
 		Sink:           localSink,
+		Recorder:       history,
 		Logger:         logger,
 		ContextBefore:  cfg.ContextBefore,
 		ContextAfter:   cfg.ContextAfter,
@@ -128,7 +166,6 @@ func runDaemon(args []string) int {
 	eng := engine.New(opts)
 
 	// The heartbeat runs on its own schedule for as long as the daemon does.
-	startedAt := time.Now()
 	hb := heartbeat.New(heartbeat.Options{
 		URL:      cfg.HeartbeatURL,
 		Interval: cfg.HeartbeatInterval,
@@ -150,11 +187,77 @@ func runDaemon(args []string) int {
 	runErr := eng.Run(ctx)
 	hbCancel()
 	hbDone.Wait()
+	stopAPI(apiCancel, apiDone, logger)
+	storeCancel()
+	storeDone.Wait()
+	if err := history.Close(); err != nil {
+		logger.Warn("closing incident history failed", "error", err)
+	}
 	if runErr != nil {
 		logger.Error("watcher stopped", "error", runErr)
 		return 1
 	}
 	return 0
+}
+
+// openHistory opens the SQLite history, falling back to an in-memory backend
+// when the database cannot be opened so detection and notification keep working
+// (DASH-26). The fallback serves current state and loses it on restart, which
+// the attach UI reports as "history unavailable".
+func openHistory(cfg config.Config, log *slog.Logger) store.Backend {
+	s, err := store.Open(store.Options{
+		Path:          cfg.DBPath,
+		Retention:     cfg.Retention,
+		OccurrenceCap: cfg.OccurrenceCap,
+		Logger:        log,
+	})
+	if err != nil {
+		log.Error("cannot open incident history; continuing without persistence",
+			"db", cfg.DBPath, "error", err)
+		return store.NewMemory(cfg.OccurrenceCap)
+	}
+	return s
+}
+
+// startAPI binds and serves the read API. A bind failure is returned so the
+// daemon fails clearly rather than serving without the API the operator asked
+// for, and so two daemons never share a socket silently (DASH-5). Disabling the
+// API leaves the daemon otherwise unchanged (DASH-6).
+func startAPI(ctx context.Context, cfg config.Config, history store.Backend, log *slog.Logger, startedAt time.Time) (context.CancelFunc, *sync.WaitGroup, error) {
+	if !cfg.APIEnabled {
+		log.Info("read API disabled by configuration")
+		return nil, &sync.WaitGroup{}, nil
+	}
+	srv := api.New(api.Options{
+		Socket:  cfg.APISocket,
+		Reader:  history,
+		Events:  history,
+		Logger:  log,
+		Started: startedAt,
+	})
+	l, err := srv.Listen()
+	if err != nil {
+		return nil, nil, err
+	}
+	apiCtx, cancel := context.WithCancel(ctx)
+	var done sync.WaitGroup
+	done.Add(1)
+	go func() {
+		defer done.Done()
+		if err := srv.Serve(apiCtx, l); err != nil {
+			log.Error("read API stopped", "error", err)
+		}
+	}()
+	log.Info("read API listening", "socket", cfg.APISocket)
+	return cancel, &done, nil
+}
+
+func stopAPI(cancel context.CancelFunc, done *sync.WaitGroup, log *slog.Logger) {
+	if cancel == nil {
+		return
+	}
+	cancel()
+	done.Wait()
 }
 
 // liveness adapts the engine's counters and the webhook's dropped count into the
@@ -256,10 +359,10 @@ func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *sl
 	return local, webhooks, nil
 }
 
-// logStartup reports the sources attached, the sinks configured, and the
-// state-machine windows, so an operator can verify configuration without
-// attaching a UI (RT-CFG-4, PROD-NFR-4).
-func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, isTerminal bool) {
+// logStartup reports the sources attached, the sinks configured, the state-
+// machine windows, and the history/API surface, so an operator can verify
+// configuration without attaching a UI (RT-CFG-4, PROD-NFR-4).
+func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, isTerminal, persistent bool) {
 	labels := make([]string, len(sources))
 	for i, src := range sources {
 		labels[i] = src.Name()
@@ -276,6 +379,15 @@ func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, is
 		sinkNames = append(sinkNames, "heartbeat="+cfg.HeartbeatInterval.String())
 	}
 
+	history := "history=memory"
+	if persistent {
+		history = "history=" + cfg.DBPath
+	}
+	api := "api=disabled"
+	if cfg.APIEnabled {
+		api = "api=" + cfg.APISocket
+	}
+
 	log.Info("watcher starting",
 		"sources", strings.Join(labels, ", "),
 		"sinks", strings.Join(sinkNames, ", "),
@@ -283,5 +395,7 @@ func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, is
 		"ollama_url", cfg.OllamaURL,
 		"throttle_window", cfg.ThrottleWindow,
 		"resolve_window", cfg.ResolveWindow,
+		"history", history,
+		"api", api,
 	)
 }

@@ -108,10 +108,14 @@ func (m Model) listHeader() string {
 			active++
 		}
 	}
+	header := fmt.Sprintf("Incidents  %d active · %d resolved", active, resolved)
 	if m.degraded {
-		return fmt.Sprintf("Incidents  %d active, %d resolved", active, resolved)
+		header = fmt.Sprintf("Incidents  %d active, %d resolved", active, resolved)
 	}
-	return fmt.Sprintf("Incidents  %d active · %d resolved", active, resolved)
+	if m.historyOff {
+		header += "  (history unavailable)"
+	}
+	return header
 }
 
 func (m Model) renderRow(i int) string {
