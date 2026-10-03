@@ -82,6 +82,13 @@ winning when both are present (flag > environment > default).
 | Notification resolve window W | `--resolve-window` | `WATCHER_RESOLVE_WINDOW` | `2m` |
 | Heartbeat URL | `--heartbeat-url` | `WATCHER_HEARTBEAT_URL` | *(disabled)* |
 | Heartbeat interval | `--heartbeat-interval` | `WATCHER_HEARTBEAT_INTERVAL` | `60s` |
+| Read API | `--api` | `WATCHER_API` | enabled |
+| API socket path | `--api-socket` | `WATCHER_API_SOCKET` | `${XDG_RUNTIME_DIR}/watcher.sock` |
+| Incident database | `--db` | `WATCHER_DB` | `watcher.db` |
+| Retention (age) | `--retention` | `WATCHER_RETENTION` | `720h` |
+| Occurrences per incident | `--occurrence-cap` | `WATCHER_OCCURRENCE_CAP` | `100` |
+| UI refresh bound | `--refresh-interval` | `WATCHER_REFRESH_INTERVAL` | `2s` |
+| List pane fraction | `--list-fraction` | `WATCHER_LIST_FRACTION` | `0.45` |
 | Ollama base URL | `--ollama-url` | `WATCHER_OLLAMA_URL` | `http://localhost:11434` |
 | Model | `--model` | `WATCHER_MODEL` | *(required)* |
 | Preceding context lines (N) | `--context-before` | `WATCHER_CONTEXT_BEFORE` | `20` |
@@ -98,6 +105,64 @@ winning when both are present (flag > environment > default).
 WATCHER_MODEL=qwen2.5-coder:0.5b \
   ./bin/watcher --file /var/log/app.log --ollama-url http://ollama:11434
 ```
+
+## Dashboard
+
+The daemon is always headless: it never allocates or renders a terminal. It
+writes incident history to SQLite, so a crash-looping service is still visible
+after Watcher itself is restarted. A separate command renders that history:
+
+```sh
+./bin/watcher attach                     # connect to the running daemon
+./bin/watcher attach --api-socket /run/user/1000/watcher.sock
+```
+
+`attach` reads the incident list, one incident's detail, and a live event stream
+over the daemon's Unix socket (default `${XDG_RUNTIME_DIR}/watcher.sock`,
+falling back to `/var/run/watcher.sock`); it never writes. The socket is created
+`0600`, so access control is filesystem-based and no auth token is needed. When
+no daemon answers, `attach` exits non-zero with an actionable message rather
+than hanging or showing an empty screen; when the daemon restarts underneath it,
+the UI shows a disconnected state and reconnects on its own.
+
+Keys:
+
+| Key | Action |
+|---|---|
+| `↑` / `k`, `↓` / `j` | Move selection |
+| `g` / `G` | Jump to first / last row |
+| `tab` / `shift+tab` | Switch focus between the list and detail panes |
+| `pgup` / `pgdn` | Scroll the detail pane |
+| `r` | Force refresh |
+| `?` | Toggle the help overlay |
+| `q`, `ctrl+c` | Quit attach (the daemon keeps running) |
+
+The list is sorted unresolved-first, then by most-recent activity, so what is
+currently failing is at the top; severity is shown per row but does not reorder,
+so rows do not jump as severities arrive. `NO_COLOR` and `TERM=dumb` switch off
+styling and use ASCII markers, and a terminal below 60×16 shows a single
+"terminal too small" message instead of a broken layout.
+
+### Read API
+
+The daemon serves its history over a local, versioned read API, so other tooling
+can consume it too, not just `attach`:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/health` | Liveness, version, uptime, counters |
+| `GET` | `/api/v1/incidents` | Incident list rows |
+| `GET` | `/api/v1/incidents/{id}` | One incident's detail, explanation, and recent occurrences |
+| `GET` | `/api/v1/events` | Server-Sent Events stream of mutations |
+
+```sh
+curl --unix-socket "${XDG_RUNTIME_DIR}/watcher.sock" http://watcher/api/v1/incidents
+```
+
+`{id}` is `source:fingerprint`, stable across restarts. Disable the API with
+`--api=false`; the daemon keeps detecting and notifying. If the database cannot
+be opened, the daemon logs the failure, keeps detecting and notifying, and
+serves current in-memory state with a "history unavailable" marker in the UI.
 
 ## Docker Compose
 
@@ -199,7 +264,7 @@ dead-man's-switch URL, so Watcher's own silence is itself detectable.
       logs, webhook sink)
 - [x] `02` — Production shape (Compose packaging, incident state machine,
       heartbeat)
-- [ ] `03` — Dashboard (headless daemon, read API, `watcher attach` TUI, SQLite
+- [x] `03` — Dashboard (headless daemon, read API, `watcher attach` TUI, SQLite
       history)
 - [ ] `04` — Evaluation (ground-truth scoring, pass/fail tally)
 - [ ] `05` — Install lifecycle (installer, `watcher onboard`, config file,
