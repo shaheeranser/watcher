@@ -143,6 +143,30 @@ notification fires (the model call is asynchronous by design, milestone 01
 null/placeholder. This protects the push-not-pull property: notification
 latency is never a function of model latency.
 
+Because the alert deliberately leaves without its explanation, one follow-up
+`ongoing` notification carries the explanation when the model returns, so the
+two facts arrive as two events rather than one that waited. The follow-up is
+owed once per pending notification and is skipped if the incident resolved in
+the meantime.
+
+### 3.5 Which sinks the state machine gates
+
+The state machine gates the **notification channel** — the webhook — not the
+local result stream. That distinction is deliberate:
+
+- STM-2/STM-3 speak of *notifications*, and STM-9 says this state machine
+  replaces the webhook's 01b throttle. The webhook is the push channel; the
+  terminal/JSONL stream is the *result* stream, which milestone 01's contract
+  (CORE-OUT-2/3) defines as one result per incident with a live count.
+- Keeping the local stream per-occurrence preserves the evaluation harness's
+  input shape and milestone 01's golden output, and it still satisfies STM-5:
+  the **tracker** records every occurrence even when a notification is
+  suppressed.
+- The engine therefore has two outputs: the local sink (terminal/JSONL) and the
+  optional notification sink (webhook). They are independent, so a failing
+  notification channel never suppresses the local result or detection
+  (RT-WH-9).
+
 ## 4. Heartbeat
 
 `internal/heartbeat` runs its own ticker (PROD-HB-3), independent of incident
@@ -173,10 +197,10 @@ Payload:
 
 | Setting | Flag | Env | Default |
 |---------|------|-----|---------|
-| Throttle window T (given its real meaning) | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | *OD-02-1* |
-| Resolve window W | `--resolve-window` | `WATCHER_RESOLVE_WINDOW` | *OD-02-2* |
+| Throttle window T (given its real meaning) | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | `15m` (OD-02-1) |
+| Resolve window W | `--resolve-window` | `WATCHER_RESOLVE_WINDOW` | `2m` (OD-02-2) |
 | Heartbeat URL | `--heartbeat-url` | `WATCHER_HEARTBEAT_URL` | none |
-| Heartbeat interval | `--heartbeat-interval` | `WATCHER_HEARTBEAT_INTERVAL` | *OD-02-3* |
+| Heartbeat interval | `--heartbeat-interval` | `WATCHER_HEARTBEAT_INTERVAL` | `60s` (OD-02-3) |
 
 `--throttle-window` was introduced in 01b (`RT-CFG-1`); this milestone is
 where it stops being a stop-gap and becomes the state machine's `T`.
@@ -205,19 +229,42 @@ Docker-source and webhook-delivery failure modes are 01b's (see
 - **Integration** — Compose locally: a crash-looping test container plus a
   receiver; assert one `new`, throttled `ongoing`, and a final `resolved`.
 
-## 8. Open decisions
+## 8. Decisions
 
-- **OD-02-1** — Default throttle window `T` (how often "still happening" pings
-  a crash loop). Too short defeats dedup; too long hides escalation.
-- **OD-02-2** — Default resolve window `W` (quiet period before "resolved").
-  Must be larger than typical restart jitter.
-- **OD-02-3** — Default heartbeat interval, and whether the default heartbeat
-  payload shape should match a specific dead-man's-switch provider or stay
-  generic.
-- **OD-02-4** — Whether a `resolved` notification should be suppressed when the
-  incident never had a successful explanation.
-- **OD-02-5** — Whether counts reset when an incident reopens after `resolved`,
-  or continue cumulatively across cycles.
+These were open when the milestone was drafted. They are now resolved; the
+values below are what the implementation uses, with the reasoning recorded so a
+later milestone can revisit a choice rather than rediscover it.
+
+- **OD-02-1 — Default throttle window `T`.** *Resolved:* `15m`, unchanged from
+  01b's stop-gap (`OD-01B-6`). It is short enough that a long-running incident
+  still reports escalation and long enough that a crash loop's "still
+  happening" update is a status, not a stream.
+- **OD-02-2 — Default resolve window `W`.** *Resolved:* `2m`. Docker's restart
+  backoff tops out around a minute, so two minutes of quiet reliably separates
+  "the process stopped" from "it is between restarts", while still announcing a
+  resolution promptly.
+- **OD-02-3 — Default heartbeat interval and payload shape.** *Resolved:* `60s`,
+  with a generic JSON payload (timestamp, uptime, and the liveness counters).
+  One ping a minute is frequent enough for a dead-man's-switch to notice a lost
+  daemon without becoming traffic, and a generic body keeps the default from
+  coupling the project to one provider's convention; a receiver that only wants
+  "the ping arrived" ignores the body.
+- **OD-02-4 — Suppress `resolved` when the incident was never explained.**
+  *Resolved:* no — always emit it. A resolved notification is a lifecycle fact,
+  not an explanation; suppressing it would leave a crash that the model could
+  not diagnose silently open forever. The notification carries the explanation
+  fields it has, marked pending or unavailable as usual.
+- **OD-02-5 — Counts on reopen.** *Resolved:* reset. A recurrence after
+  resolution starts a fresh cycle (PROD-STM-4), so its count restarts at one and
+  its first-seen time is the new cycle's; a lifetime cumulative count would make
+  "now at N" misleading after the incident was announced resolved.
+
+One deviation from §3.1 worth recording: the diagram has no transition for the
+explanation arriving. The implementation adds one follow-up `ongoing`
+notification that carries the explanation after a pending `new`/`ongoing` alert,
+so the alert is immediate *and* the diagnosis still reaches the channel (§3.4).
+It is bounded — one follow-up per pending notification — and is the mechanism
+that makes STM-8's pending marker useful rather than a dead end.
 
 Moved to `../01b-runtime/design.md` §12 with their mechanisms: the Docker client
 dependency choice (was OD-02-6), the Docker lookback default (was OD-02-8), the
