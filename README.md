@@ -78,7 +78,10 @@ winning when both are present (flag > environment > default).
 | Webhook retries | `--webhook-retries` | `WATCHER_WEBHOOK_RETRIES` | `5` |
 | Webhook backoff base / cap | `--webhook-backoff-base` / `-max` | `WATCHER_WEBHOOK_BACKOFF_BASE` / `_MAX` | `1s` / `30s` |
 | Webhook fallback file | `--webhook-fallback` | `WATCHER_WEBHOOK_FALLBACK` | `undelivered.jsonl` |
-| Notification throttle | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | `15m` |
+| Notification throttle T | `--throttle-window` | `WATCHER_THROTTLE_WINDOW` | `15m` |
+| Notification resolve window W | `--resolve-window` | `WATCHER_RESOLVE_WINDOW` | `2m` |
+| Heartbeat URL | `--heartbeat-url` | `WATCHER_HEARTBEAT_URL` | *(disabled)* |
+| Heartbeat interval | `--heartbeat-interval` | `WATCHER_HEARTBEAT_INTERVAL` | `60s` |
 | Ollama base URL | `--ollama-url` | `WATCHER_OLLAMA_URL` | `http://localhost:11434` |
 | Model | `--model` | `WATCHER_MODEL` | *(required)* |
 | Preceding context lines (N) | `--context-before` | `WATCHER_CONTEXT_BEFORE` | `20` |
@@ -95,6 +98,32 @@ winning when both are present (flag > environment > default).
 WATCHER_MODEL=qwen2.5-coder:0.5b \
   ./bin/watcher --file /var/log/app.log --ollama-url http://ollama:11434
 ```
+
+## Docker Compose
+
+The repository ships a Compose stack that runs Watcher alongside its own Ollama:
+
+```sh
+WATCHER_MODEL=qwen2.5:1.5b docker compose up --build
+```
+
+- `ollama` — the model server. Its weights live in the `ollama-models` named
+  volume, so they are pulled once and reused on later boots.
+- `ollama-init` — a one-shot service that runs `ollama pull "$WATCHER_MODEL"`
+  on first boot. `watcher` waits for it, so a clean machine needs no manual
+  pull.
+- `watcher` — the daemon, built from the repository `Dockerfile`, waiting until
+  Ollama reports healthy. The Docker socket is mounted **read-only**; with no
+  `--containers`, `watcher run` attaches to this project's sibling containers.
+
+`WATCHER_MODEL` is required — put it in a `.env` file next to `compose.yaml` to
+keep the command short. The stack also reads `WATCHER_WEBHOOK_URL`,
+`WATCHER_WEBHOOK_FORMAT` (default `discord`), `WATCHER_HEARTBEAT_URL`,
+`WATCHER_HEARTBEAT_INTERVAL`, `WATCHER_THROTTLE_WINDOW`, and
+`WATCHER_RESOLVE_WINDOW`; everything except the model has a working default.
+The service restarts unless stopped and keeps detecting and counting even while
+the model is temporarily unavailable, so a model outage delays explanations but
+never the alert.
 
 ## Architecture
 
@@ -114,11 +143,13 @@ flowchart LR
         detector["Detector"]
         curation["Context curation"]
         fingerprint["Fingerprinting"]
-        counts["Incident state / counts"]
+        counts["Incident counts"]
+        machine["Incident state machine<br/>new / ongoing / resolved"]
     end
 
     backend["Backend (Ollama)"]
-    sinks["Sinks: terminal · jsonl · webhook"]
+    results["Local results: terminal · JSONL"]
+    notify["Notification channel: webhook"]
 
     s_stdin --> detector
     s_file --> detector
@@ -127,7 +158,10 @@ flowchart LR
     curation --> fingerprint
     fingerprint --> counts
     counts -->|curated excerpt| backend
-    backend -->|structured explanation| sinks
+    counts -->|occurrence| machine
+    machine -->|new / ongoing / resolved| notify
+    backend -->|structured explanation| results
+    machine -.->|follow-up with explanation| notify
 ```
 
 - **Source** — produces log lines, each tagged with an operator-assigned label:
@@ -138,13 +172,23 @@ flowchart LR
 - **Backend** — sends a bounded, curated excerpt to Ollama and returns
   structured fields: summary, likely cause, evidence, suggested fix,
   confidence, severity.
-- **Sink** — delivers the finished result: to the terminal, as JSON lines, or
-  to a webhook.
+- **Sink** — delivers the finished result. The local stream (terminal or JSON
+  lines) reports every occurrence with a rising count. The notification channel
+  (webhook) is gated by the incident state machine, so it carries only `new`,
+  `ongoing`, and `resolved` — a crash loop produces one alert, periodic
+  "still happening" updates, and one resolution, not one message per occurrence.
 
 Two properties this design protects: it is a **push** system (it notices and
 reports on its own, and never waits for you to invoke it against an incident),
 and it **deduplicates** (a crash-looping process produces one incident with a
 live count, not one alert per occurrence).
+
+The first notification goes out *before* the model call, carrying an explicit
+`explanation_pending` marker; a follow-up notification delivers the explanation
+once it is ready. That keeps alert latency independent of model latency, so a
+slow or unreachable Ollama delays the diagnosis without delaying the alert. A
+**heartbeat** — a periodic ping carrying liveness counters — can be pointed at a
+dead-man's-switch URL, so Watcher's own silence is itself detectable.
 
 ## Roadmap
 
@@ -153,7 +197,7 @@ live count, not one alert per occurrence).
       curation, Ollama backend, guardrail, output)
 - [x] `01b` — Runtime (run verb, labeled multi-source incl. Docker container
       logs, webhook sink)
-- [ ] `02` — Production shape (Compose packaging, incident state machine,
+- [x] `02` — Production shape (Compose packaging, incident state machine,
       heartbeat)
 - [ ] `03` — Dashboard (headless daemon, read API, `watcher attach` TUI, SQLite
       history)
