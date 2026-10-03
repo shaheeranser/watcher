@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/shaheeranser/watcher/internal/store"
 )
 
 const (
@@ -15,6 +17,13 @@ const (
 	// stalled stream never freezes the UI silently (DASH-21).
 	watchdogFactor = 5
 )
+
+// nextResult is one read from the event stream: either an event or the error
+// that ended the stream.
+type nextResult struct {
+	ev  store.Event
+	err error
+}
 
 // RunSource feeds the program from the daemon until ctx is cancelled. SSE is the
 // primary channel; a per-mutation event triggers a refetch, and a watchdog
@@ -66,12 +75,12 @@ func RunSource(ctx context.Context, open OpenFunc, refresh time.Duration, send s
 // returns true when the stream ended on its own (a disconnect to reconnect
 // from) and false when the cancellation stopped it.
 func readStream(ctx context.Context, reader EventReader, watchdog time.Duration, send sendFunc) bool {
-	results := make(chan error, 1)
+	results := make(chan nextResult, 1)
 	go func() {
 		for {
-			_, err := reader.Next()
+			ev, err := reader.Next()
 			select {
-			case results <- err:
+			case results <- nextResult{ev: ev, err: err}:
 			case <-ctx.Done():
 				return
 			}
@@ -90,11 +99,11 @@ func readStream(ctx context.Context, reader EventReader, watchdog time.Duration,
 		case <-timer.C:
 			send(pollMsg{})
 			timer.Reset(watchdog)
-		case err := <-results:
-			if err != nil {
+		case result := <-results:
+			if result.err != nil {
 				return true
 			}
-			send(eventMsg{})
+			send(eventMsg{event: result.ev})
 			timer.Reset(watchdog)
 		}
 	}

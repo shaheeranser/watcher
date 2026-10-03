@@ -302,6 +302,66 @@ func ids(rows []api.IncidentRow) []string {
 	return out
 }
 
+func TestEventRefreshesSelectedDetail(t *testing.T) {
+	selected := "web-1:aaaa"
+	f := &fakeFetcher{
+		rows: sampleRows(),
+		details: map[string]api.IncidentDetail{
+			selected: {IncidentRow: api.IncidentRow{ID: selected, Fingerprint: "aaaa", State: "resolved", Summary: "boom"}},
+		},
+	}
+	m := New(Options{Fetcher: f, Initial: sampleRows(), Degraded: true, Now: func() time.Time { return fixedNow }})
+	m.width, m.height = 100, 30
+	m.selected = indexOfID(m.rows, selected)
+	m.selectedID = selected
+	m.detailID = selected
+
+	// An event about the selected incident must refetch its detail, so an
+	// explanation arriving after the row resolved still reaches the detail pane.
+	_, cmd := m.Update(eventMsg{event: store.Event{Type: store.EventExplained, ID: selected}})
+	if !hasDetailFetch(drainCmd(cmd), selected) {
+		t.Fatal("an event for the selected incident must refetch its detail (DASH-19)")
+	}
+
+	// An event about a different incident must not refetch the selected detail.
+	_, cmd = m.Update(eventMsg{event: store.Event{Type: store.EventCounted, ID: "other:1"}})
+	if hasDetailFetch(drainCmd(cmd), selected) {
+		t.Error("an event for another incident should not refetch the selected detail")
+	}
+
+	// The watchdog fallback refreshes everything visible.
+	_, cmd = m.Update(pollMsg{})
+	if !hasDetailFetch(drainCmd(cmd), selected) {
+		t.Error("the polling fallback must refresh the selected detail")
+	}
+}
+
+// drainCmd runs a command and flattens any tea.BatchMsg it returns, so a test
+// can assert which fetches a message triggered.
+func drainCmd(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, sub := range batch {
+			out = append(out, drainCmd(sub)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+func hasDetailFetch(msgs []tea.Msg, id string) bool {
+	for _, msg := range msgs {
+		if d, ok := msg.(detailMsg); ok && d.id == id {
+			return true
+		}
+	}
+	return false
+}
+
 // --- source tests ---
 
 type streamResult struct {

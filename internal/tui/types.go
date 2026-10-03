@@ -79,8 +79,12 @@ type detailMsg struct {
 	err    error
 }
 
-// eventMsg announces a mutation from the event stream; the model refetches.
-type eventMsg struct{}
+// eventMsg announces a mutation from the event stream. It carries the event so
+// the model can tell whether the currently selected incident changed and must be
+// refetched, rather than refetching every selected detail on every event.
+type eventMsg struct {
+	event store.Event
+}
 
 // pollMsg is the watchdog's fallback, sent when the stream has gone quiet so the
 // UI still updates (DASH-21).

@@ -113,8 +113,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll = 0
 		}
 		return m, nil
-	case eventMsg, pollMsg:
-		return m, m.fetchRows()
+	case eventMsg:
+		// Always refresh the list; refresh the detail only when the event is
+		// about the incident on screen. An explanation arriving after the
+		// incident resolved must still reach the detail pane (DASH-19), which is
+		// the whole reason the event carries its id.
+		cmds := []tea.Cmd{m.fetchRows()}
+		if msg.event.ID == "" || msg.event.ID == m.detailID {
+			cmds = append(cmds, m.fetchDetail(m.detailID))
+		}
+		return m, tea.Batch(cmds...)
+	case pollMsg:
+		// The watchdog is a full fallback: refresh everything visible.
+		return m, tea.Batch(m.fetchRows(), m.fetchDetail(m.detailID))
 	case connMsg:
 		m.conn = msg.state
 		m.connErr = msg.err
