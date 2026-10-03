@@ -43,8 +43,9 @@ other tooling later without designing a plugin surface now.
   back to `/var/run/watcher.sock`.
 - The socket is created with `0600` permissions, owned by the daemon's user,
   so access control is filesystem-based and no auth token is needed.
-- If the socket path is not writable, the daemon can be configured to listen
-  on loopback TCP with a shared-secret header instead — flagged as OD-03-1.
+- Loopback TCP (with a shared-secret header) is **not** implemented in this
+  milestone; the Unix socket satisfies the requirement and keeps the auth surface
+  at zero (OD-03-1). It can be added later without changing the wire shapes.
 - The daemon fails clearly when the socket path is already held by a live
   process (DASH-5) rather than silently binding an alternative.
 
@@ -57,8 +58,12 @@ other tooling later without designing a plugin surface now.
 | `GET` | `/api/v1/incidents/{id}` | Full detail: the list fields plus explanation fields, evidence array, and recent occurrence timestamps |
 | `GET` | `/api/v1/events` | Server-Sent Events stream of mutations (created, counted, state-changed, explained) |
 
-`{id}` is the fingerprint hash — it is stable across restarts, which is what
-makes the persistence and the "one row per distinct crash" goal line up.
+`{id}` is `source:fingerprint` — both halves are stable across restarts, which
+is what lets the UI reselect the same incident after a reconnect or a daemon
+restart, and what makes one row per distinct (source, crash) line up. The label
+is part of the identity because the same crash text on two sources is two
+incidents (01b §3.2), so the fingerprint alone cannot key a row; see the
+deviation note in §8.
 
 ### 2.3 Live updates
 
@@ -253,47 +258,94 @@ unavailable (DASH-NFR-4).
 |---------|------|-----|---------|
 | API socket path | `--api-socket` | `WATCHER_API_SOCKET` | `${XDG_RUNTIME_DIR}/watcher.sock` |
 | API enable/disable | `--api` | `WATCHER_API` | enabled |
-| Database path | `--db` | `WATCHER_DB` | `./watcher.db` (OD-03-4) |
-| Retention (age) | `--retention` | `WATCHER_RETENTION` | *OD-03-5* |
-| Occurrences per incident kept | `--occurrence-cap` | `WATCHER_OCCURRENCE_CAP` | *OD-03-5* |
-| UI refresh bound | `--refresh-interval` | `WATCHER_REFRESH_INTERVAL` | *OD-03-6* |
+| Database path | `--db` | `WATCHER_DB` | `./watcher.db` |
+| Retention (age) | `--retention` | `WATCHER_RETENTION` | `720h` (30d) |
+| Occurrences per incident kept | `--occurrence-cap` | `WATCHER_OCCURRENCE_CAP` | `100` |
+| UI refresh bound | `--refresh-interval` | `WATCHER_REFRESH_INTERVAL` | `2s` |
 | List pane height fraction | `--list-fraction` | `WATCHER_LIST_FRACTION` | `0.45` |
+
+Retention and the occurrence cap each accept `0` to disable that bound. The SSE
+watchdog is derived from the refresh interval (5×, floored at 1s) rather than
+being a separate setting: it only decides when the fallback poll kicks in, and
+the client's polling is free of charge when nothing is changing.
 
 ## 7. Testing strategy
 
 - **Persistence** — round-trip tests: insert incidents/explanations/occurrences,
-  reopen the DB, assert equality; migration test from an empty DB; retention
-  trimming test.
-- **API** — `httptest` against the handler set: list shape, detail shape, 404
-  for unknown fingerprint, health.
+  reopen the DB, assert equality; migration test from an empty DB and from a
+  newer schema; retention trimming test.
+- **API** — `httptest` and a real Unix socket: health, list shape, detail shape,
+  404 for an unknown id, multi-source ids with `/` and spaces round-tripping, and
+  a stalled subscriber not blocking a publisher.
 - **SSE** — assert an event is emitted per mutation and that a stalled reader
   does not block the daemon.
 - **TUI model** — pure `Update`/`View` tests: drive `WindowSizeMsg` at many
-  sizes (including below minimum) asserting no panic and expected pane sizes;
-  drive key messages asserting selection and focus changes; assert sort order.
-- **Reconnect** — fake API that drops the connection; assert the disconnected
-  state appears and reconnection restores updates.
-- **Dogfood** — run the daemon against a fixture log and drive `attach` with a
-  scripted input sequence (bubbletea's test harness) to assert the rendered
-  output contains the expected incident.
+  sizes (including below minimum) asserting no panic and the expected panes;
+  drive key messages asserting selection and focus changes; assert sort order;
+  a golden `View`.
+- **Reconnect** — a fake event source that drops the connection and a quiet
+  stream; assert the disconnected state appears, the watchdog polls, and
+  reconnection restores updates.
+- **Dogfood** — run the daemon against a fixture log and exercise the API over
+  its socket (list, detail, 404, restart, DB-removed); `attach` is driven as far
+  as the environment allows and its model is covered directly.
 
-## 8. Open decisions
+## 8. Decisions
 
-- **OD-03-1** — Whether to support loopback TCP (with a token) as an
-  alternative to the Unix socket, or Unix-socket-only.
-- **OD-03-2** — Exact pure-Go SQLite driver.
-- **OD-03-3** — Whether counts/state resume from the database after a restart,
-  or restart fresh for notification purposes (interacts with
-  `../02-production-shape/design.md` §4.3).
-- **OD-03-4** — Default database path (working directory vs. a state directory
-  such as `/var/lib/watcher`).
-- **OD-03-5** — Default retention policy: age cap, per-incident occurrence cap,
-  or both.
-- **OD-03-6** — Default UI refresh bound and the SSE watchdog interval.
-- **OD-03-7** — Whether a later milestone should allow acknowledging/silencing
-  incidents from the TUI (which would make `attach` no longer read-only and
-  would add write routes to the API).
-- **OD-03-8** — Whether severity should influence list ordering (this design
-  keeps ordering by recency to avoid rows jumping).
-- **OD-03-9** — Whether the TUI should show a severity/kind breakdown summary
-  header, and if so what is most useful at a glance.
+These were open when the milestone was drafted. They are now resolved, and the
+values below are what the implementation uses; the reasoning is recorded so a
+later milestone can revisit a choice rather than rediscover it.
+
+- **OD-03-1 — Unix socket only, or TCP as well.** *Resolved:* Unix-socket only.
+  It satisfies DASH-2, and filesystem permissions (`0600`) give per-user access
+  control with no token to manage or leak. Loopback TCP would add an auth
+  surface and a second configuration shape for a case nothing has asked for yet;
+  it stays available as a later addition that does not change the wire formats.
+- **OD-03-2 — Pure-Go SQLite driver.** *Resolved:* `modernc.org/sqlite`. It is
+  the de-facto pure-Go SQLite driver, works through `database/sql`, and is
+  actively maintained, which preserves the single-binary, `CGO_ENABLED=0`
+  property from `../01-core-engine/requirements.md` (CORE-NFR-5).
+- **OD-03-3 — Counts/state across a restart.** *Resolved:* history is
+  rehydrated for display, but notification state **and the live count cycle**
+  restart fresh, consistent with `../02-production-shape/design.md` §4.3 and
+  OD-02-5. A still-crashing fingerprint after a restart is announced as `new`
+  with a count from one, and the resolve ticker — which only knows incidents the
+  current process has seen — cannot produce a spurious `resolved`. Accumulating
+  a lifetime count across a restart would make "now at N" misleading, so it is
+  deliberately not done.
+- **OD-03-4 — Default database path.** *Resolved:* `./watcher.db`, in the
+  working directory. It matches the local, bare-metal reference shape the rest
+  of the project uses; a deployment that wants a durable state directory (the
+  container, or milestone 05's systemd unit) sets `--db`. Revisiting this for
+  the install lifecycle is that milestone's call, not a silent change here.
+- **OD-03-5 — Default retention.** *Resolved:* both bounds — 30 days of age and
+  100 occurrence rows per incident, each disableable with `0`. Occurrences are
+  the growth chokepoint (they accrue per crash while incidents and explanations
+  stay small), so capping them bounds the database; the age cap additionally
+  removes stale resolved incidents nobody will open again.
+- **OD-03-6 — UI refresh bound and SSE watchdog.** *Resolved:* a 2s refresh
+  interval, with the watchdog derived at 5× the interval (floored at 1s, so 10s
+  by default). Two seconds is a bound far below human perception of "live" and
+  costs nothing when nothing is changing, and there is no per-client cost at all
+  when nobody is attached (DASH-3). The client resets the watchdog on every
+  event, so polling happens only when the stream is genuinely quiet — which is
+  exactly when there is nothing to miss.
+- **OD-03-7 — Acknowledging/silencing from the TUI.** *Deferred:* out of scope
+  here; the UI stays read-only (DASH-10). A later milestone wanting it would add
+  write routes and would have to revisit this read-only contract.
+- **OD-03-8 — Severity in list ordering.** *Resolved:* no. Ordering stays
+  unresolved-first then by recency; severity is shown per row but does not
+  reorder, so rows do not jump as severities arrive late.
+- **OD-03-9 — Breakdown header.** *Resolved:* the minimal header from §4.2's
+  layout, `N active · M resolved` (plus a "history unavailable" marker when the
+  daemon is serving in-memory state). The at-a-glance question is how much is on
+  fire, which the active/resolved split answers; a per-severity breakdown would
+  add a line of chrome without changing what an operator does next.
+
+One deviation from §2.2 worth recording: `{id}` is `source:fingerprint`, not the
+fingerprint alone. The route table was written against milestone 01, where an
+incident was keyed by fingerprint; milestone 01b made the identity
+`(label, fingerprint)` because the same crash text on two sources is two
+incidents. Keying rows by the fingerprint alone would collapse those into one,
+so the id carries both halves — still stable across restarts, which is the
+property §2.2 actually needed.
