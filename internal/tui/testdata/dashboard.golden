@@ -1,0 +1,24 @@
+Incidents  3 active, 1 resolved                                                                     
+* —        generic-fatal api-1       x1    1s ago  analysing                                        
+* HIGH     go-panic      web-1       x12   2s ago  panic: send on closed channel                    
+* MEDIUM   python-trace… worker-2    x3    1m ago  Traceback: KeyError 'user_id'                    
+o MEDIUM   generic-fatal api-1       x1    1h ago  FATAL: connection refused                        
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+Detail  aaaa  ongoing                                                                               
+Summary      panic: send on closed channel                                                          
+Likely cause the hub closed before Broadcast ran                                                    
+Evidence     > panic: send on closed channel                                                        
+             > main.(*Hub).Broadcast(...)                                                           
+Suggested fix select on a done channel before sending                                               
+Confidence   0.72   Severity HIGH                                                                   
+State        ongoing   Count 12                                                                     
+First seen   15:04Z                                                                                 
+Last seen    15:06Z                                                                                 
+Recent       2s ago  2m ago                                                                         
+                                                                                                    
+                                                                                                    
+up/down select | tab panes | r refresh | ? help | q quit                                 * connected
