@@ -1,0 +1,18 @@
+# Keep the build context to what `go build` actually needs.
+.git
+.github
+.commandcode
+docs
+bin
+/watcher
+*.md
+*.jsonl
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.test
+*.out
+.env
+.env.local

@@ -1,0 +1,60 @@
+# The Compose stack Watcher deploys as: a local Ollama, a one-shot model pull,
+# and the watcher daemon. `WATCHER_MODEL` must be set (a .env file is the usual
+# place); everything else has a working default.
+#
+#   WATCHER_MODEL=qwen2.5:1.5b docker compose up
+#
+# Configuration is supplied entirely through the environment — the container
+# shape has no onboarding or config file. Watcher attaches to this project's
+# sibling containers by default, which is why it needs the Docker socket.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    restart: unless-stopped
+
+  # Pull the configured model once, on first boot. Keeping the pull out of
+  # `watcher` lets it be retried independently and keeps the daemon's startup
+  # simple; the named volume makes it a one-time cost (PROD-PKG-3, PROD-PKG-4).
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+      MODEL: "${WATCHER_MODEL:?set WATCHER_MODEL, e.g. WATCHER_MODEL=qwen2.5:1.5b}"
+    entrypoint: ["/bin/sh", "-c", "ollama pull \"$$MODEL\""]
+    restart: "no"
+
+  watcher:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    volumes:
+      # Read-only: Watcher only reads container logs and lifecycle events
+      # (PROD-PKG-5).
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    environment:
+      WATCHER_OLLAMA_URL: "http://ollama:11434"
+      WATCHER_MODEL: "${WATCHER_MODEL:?set WATCHER_MODEL, e.g. WATCHER_MODEL=qwen2.5:1.5b}"
+      WATCHER_WEBHOOK_URL: "${WATCHER_WEBHOOK_URL:-}"
+      WATCHER_WEBHOOK_FORMAT: "${WATCHER_WEBHOOK_FORMAT:-discord}"
+      WATCHER_HEARTBEAT_URL: "${WATCHER_HEARTBEAT_URL:-}"
+      WATCHER_HEARTBEAT_INTERVAL: "${WATCHER_HEARTBEAT_INTERVAL:-60s}"
+      WATCHER_THROTTLE_WINDOW: "${WATCHER_THROTTLE_WINDOW:-15m}"
+      WATCHER_RESOLVE_WINDOW: "${WATCHER_RESOLVE_WINDOW:-2m}"
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
