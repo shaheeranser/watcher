@@ -9,12 +9,15 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/shaheeranser/watcher/internal/backend"
 	"github.com/shaheeranser/watcher/internal/config"
 	"github.com/shaheeranser/watcher/internal/engine"
 	"github.com/shaheeranser/watcher/internal/guard"
+	"github.com/shaheeranser/watcher/internal/heartbeat"
 	"github.com/shaheeranser/watcher/internal/sink"
 	"github.com/shaheeranser/watcher/internal/sink/webhook"
 	"github.com/shaheeranser/watcher/internal/source"
@@ -97,7 +100,7 @@ func runDaemon(args []string) int {
 	}
 
 	isTerminal := sink.IsTerminal(os.Stdout)
-	localSink, notifySink, err := buildSinks(ctx, cfg, isTerminal, logger)
+	localSink, webhookSink, err := buildSinks(ctx, cfg, isTerminal, logger)
 	if err != nil {
 		logger.Error("cannot start sinks", "error", err)
 		return 1
@@ -105,11 +108,10 @@ func runDaemon(args []string) int {
 
 	logStartup(logger, cfg, sources, isTerminal)
 
-	eng := engine.New(engine.Options{
+	opts := engine.Options{
 		Sources:        sources,
 		Backend:        backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout, cfg.OllamaMaxTokens),
 		Sink:           localSink,
-		Notifications:  notifySink,
 		Logger:         logger,
 		ContextBefore:  cfg.ContextBefore,
 		ContextAfter:   cfg.ContextAfter,
@@ -119,13 +121,59 @@ func runDaemon(args []string) int {
 		ExplainWindow:  cfg.ExplainWindow,
 		ThrottleWindow: cfg.ThrottleWindow,
 		ResolveWindow:  cfg.ResolveWindow,
+	}
+	if webhookSink != nil {
+		opts.Notifications = webhookSink
+	}
+	eng := engine.New(opts)
+
+	// The heartbeat runs on its own schedule for as long as the daemon does.
+	startedAt := time.Now()
+	hb := heartbeat.New(heartbeat.Options{
+		URL:      cfg.HeartbeatURL,
+		Interval: cfg.HeartbeatInterval,
+		Logger:   logger,
+		Stats:    liveness(eng, webhookSink, startedAt),
 	})
 
-	if err := eng.Run(ctx); err != nil {
-		logger.Error("watcher stopped", "error", err)
+	hbCtx, hbCancel := context.WithCancel(ctx)
+	defer hbCancel()
+	var hbDone sync.WaitGroup
+	if hb.Enabled() {
+		hbDone.Add(1)
+		go func() {
+			defer hbDone.Done()
+			hb.Run(hbCtx)
+		}()
+	}
+
+	runErr := eng.Run(ctx)
+	hbCancel()
+	hbDone.Wait()
+	if runErr != nil {
+		logger.Error("watcher stopped", "error", runErr)
 		return 1
 	}
 	return 0
+}
+
+// liveness adapts the engine's counters and the webhook's dropped count into the
+// heartbeat payload.
+func liveness(eng *engine.Engine, wh *webhook.Webhook, startedAt time.Time) func() heartbeat.Stats {
+	return func() heartbeat.Stats {
+		s := eng.Stats()
+		var dropped int64
+		if wh != nil {
+			dropped = wh.Dropped()
+		}
+		return heartbeat.Stats{
+			Uptime:               time.Since(startedAt),
+			LinesProcessed:       s.LinesProcessed,
+			IncidentsTracked:     s.IncidentsTracked,
+			NotificationsSent:    s.NotificationsSent,
+			NotificationsDropped: dropped,
+		}
+	}
 }
 
 // buildSources turns the configuration into the streams to watch. With no
@@ -188,12 +236,12 @@ func configuredSources(cfg config.Config, log *slog.Logger) []source.Source {
 // stdout) and, when configured, the notification channel. They are separate
 // outputs: the local stream reports every occurrence, while the notification
 // channel carries only the state machine's new/ongoing/resolved decisions.
-func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *slog.Logger) (local sink.Sink, notifications sink.Sink, err error) {
+func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *slog.Logger) (local sink.Sink, webhooks *webhook.Webhook, err error) {
 	local = sink.New(os.Stdout, isTerminal)
 	if cfg.WebhookURL == "" {
 		return local, nil, nil
 	}
-	webhooks, err := webhook.New(ctx, webhook.Options{
+	webhooks, err = webhook.New(ctx, webhook.Options{
 		URL:         cfg.WebhookURL,
 		Provider:    cfg.WebhookFormat,
 		Retries:     cfg.WebhookRetries,
@@ -208,20 +256,24 @@ func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *sl
 	return local, webhooks, nil
 }
 
-// logStartup reports the sources attached and the sinks configured, so an
-// operator can verify configuration without attaching a UI (RT-CFG-4).
+// logStartup reports the sources attached, the sinks configured, and the
+// state-machine windows, so an operator can verify configuration without
+// attaching a UI (RT-CFG-4, PROD-NFR-4).
 func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, isTerminal bool) {
 	labels := make([]string, len(sources))
 	for i, src := range sources {
 		labels[i] = src.Name()
 	}
 
-	sinkNames := []string{"jsonl"}
+	sinkNames := []string{"results=jsonl"}
 	if isTerminal {
-		sinkNames[0] = "terminal"
+		sinkNames[0] = "results=terminal"
 	}
 	if cfg.WebhookURL != "" {
-		sinkNames = append(sinkNames, "webhook("+cfg.WebhookFormat+")")
+		sinkNames = append(sinkNames, "notifications=webhook("+cfg.WebhookFormat+")")
+	}
+	if cfg.HeartbeatURL != "" {
+		sinkNames = append(sinkNames, "heartbeat="+cfg.HeartbeatInterval.String())
 	}
 
 	log.Info("watcher starting",
@@ -230,5 +282,6 @@ func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, is
 		"model", cfg.Model,
 		"ollama_url", cfg.OllamaURL,
 		"throttle_window", cfg.ThrottleWindow,
+		"resolve_window", cfg.ResolveWindow,
 	)
 }
