@@ -417,3 +417,197 @@ func TestSourceSetupErrorIsFatal(t *testing.T) {
 		t.Fatalf("error = %v, want a fatal setup error naming the source", err)
 	}
 }
+
+// fakeClock is a concurrency-safe clock the state-machine tests advance by hand.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// chanSource streams lines fed to it on demand, so a test can drive occurrences
+// and resolutions in a fixed order.
+type chanSource struct {
+	name  string
+	lines chan string
+}
+
+func (c *chanSource) Name() string { return c.name }
+
+func (c *chanSource) Stream(ctx context.Context) (<-chan source.Line, error) {
+	out := make(chan source.Line, 16)
+	go func() {
+		defer close(out)
+		i := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case raw, ok := <-c.lines:
+				if !ok {
+					return
+				}
+				select {
+				case out <- source.Line{Raw: raw, Source: c.name, ArrivedAt: time.Unix(int64(i), 0)}:
+				case <-ctx.Done():
+					return
+				}
+				i++
+			}
+		}
+	}()
+	return out, nil
+}
+
+func waitFor(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before the deadline")
+}
+
+func send(s *chanSource, lines []string) {
+	for _, l := range lines {
+		s.lines <- l
+	}
+}
+
+func notificationKinds(results []sink.Result) []string {
+	out := make([]string, len(results))
+	for i, r := range results {
+		out[i] = r.Notification
+	}
+	return out
+}
+
+func TestNotificationsAnnounceNewThenExplanation(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	local := &captureSink{}
+	notify := &captureSink{}
+	src := &chanSource{name: "app.log", lines: make(chan string, 16)}
+
+	opts := baseOptions(src, be, local)
+	opts.Notifications = notify
+	opts.ThrottleWindow = 15 * time.Minute
+	opts.ResolveWindow = 0
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	eng := New(opts)
+	go func() { done <- eng.Run(ctx) }()
+
+	send(src, goPanic)
+
+	waitFor(t, func() bool { return len(notify.all()) >= 2 })
+	kinds := notificationKinds(notify.all())
+	if kinds[0] != "new" || kinds[1] != "ongoing" {
+		t.Fatalf("notification kinds = %v, want [new ongoing]", kinds)
+	}
+	first := notify.all()[0]
+	if !first.Pending {
+		t.Error("the new notification should be pending, having gone out before the model call")
+	}
+	if first.Explanation != nil {
+		t.Error("the new notification must not carry an explanation")
+	}
+	if second := notify.all()[1]; second.Explanation == nil {
+		t.Error("the follow-up notification should carry the explanation")
+	}
+
+	// A repeat inside the throttle window is counted locally but not notified.
+	send(src, goPanic)
+	waitFor(t, func() bool { return len(local.all()) >= 2 })
+	if got := len(notify.all()); got != 2 {
+		t.Errorf("notifications = %d, want 2 (the repeat is suppressed)", got)
+	}
+	if got := local.all()[1].Count; got != 2 {
+		t.Errorf("local count = %d, want 2 (every occurrence is still reported)", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
+	}
+}
+
+func TestNotificationResolvesAndReopensFresh(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	notify := &captureSink{}
+	clock := &fakeClock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	src := &chanSource{name: "app.log", lines: make(chan string, 16)}
+
+	opts := baseOptions(src, be, &captureSink{})
+	opts.Notifications = notify
+	opts.ThrottleWindow = time.Minute
+	opts.ResolveWindow = 10 * time.Second
+	opts.resolveTick = 2 * time.Millisecond
+	opts.now = clock.Now
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	eng := New(opts)
+	go func() { done <- eng.Run(ctx) }()
+
+	send(src, goPanic)
+	waitFor(t, func() bool { return hasKind(notify.all(), "new") })
+
+	// Quiet past the resolve window: exactly one resolved is announced.
+	clock.Advance(11 * time.Second)
+	waitFor(t, func() bool { return hasKind(notify.all(), "resolved") })
+
+	// A recurrence after resolution starts a fresh cycle with a reset count.
+	clock.Advance(time.Second)
+	send(src, goPanic)
+	waitFor(t, func() bool { return countNew(notify.all()) == 2 })
+	for _, r := range notify.all() {
+		if r.Notification == "new" && r.Count != 1 {
+			t.Errorf("reopened new notification count = %d, want 1", r.Count)
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
+	}
+}
+
+func hasKind(results []sink.Result, kind string) bool {
+	for _, r := range results {
+		if r.Notification == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func countNew(results []sink.Result) int {
+	n := 0
+	for _, r := range results {
+		if r.Notification == "new" {
+			n++
+		}
+	}
+	return n
+}

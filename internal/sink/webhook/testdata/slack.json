@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "[HIGH] go-panic on backend",
+        "text": "[INCIDENT] go-panic on backend (high)",
         "type": "plain_text"
       },
       "type": "header"
@@ -15,5 +15,5 @@
       "type": "section"
     }
   ],
-  "text": "[HIGH] go-panic on backend — nil pointer dereference"
+  "text": "[INCIDENT] go-panic on backend (high) — nil pointer dereference"
 }

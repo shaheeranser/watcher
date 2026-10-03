@@ -22,6 +22,15 @@ type Result struct {
 	Explanation *backend.Explanation
 	ExplainErr  string
 	Model       string
+
+	// Notification is the lifecycle kind (new/ongoing/resolved) on the
+	// notification channel. It is empty on the local result stream, which
+	// reports every occurrence rather than the notification policy.
+	Notification string
+
+	// Pending marks a notification sent before the model returned, so a
+	// receiver can tell "not explained yet" from "will never be explained".
+	Pending bool
 }
 
 // Sink emits a result. Emit must be safe for concurrent use and must not write

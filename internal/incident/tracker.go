@@ -41,8 +41,12 @@ func (t *Tracker) Observe(label, fingerprint, kind string, now time.Time) (Incid
 	k := key{label: label, fingerprint: fingerprint}
 	inc, ok := t.incidents[k]
 	if !ok {
-		inc = &Incident{Fingerprint: fingerprint, Kind: kind, Source: label, FirstSeen: now}
+		inc = &Incident{Fingerprint: fingerprint, Kind: kind, Source: label}
 		t.incidents[k] = inc
+	}
+	// A reset incident has no count, so this occurrence opens a new cycle.
+	if inc.Count == 0 {
+		inc.FirstSeen = now
 	}
 	inc.Count++
 	inc.LastSeen = now
@@ -68,4 +72,44 @@ func (t *Tracker) RecordExplanation(label, fingerprint string, expl *backend.Exp
 	inc.Model = model
 	inc.ExplainErr = explainErr
 	return *inc
+}
+
+// Reset forgets an incident's accumulated count, first-seen time, explanation,
+// and explanation window so that a fingerprint which recurs after being
+// resolved starts a genuinely fresh cycle (PROD-STM-4, OD-02-5). It is a no-op
+// for an incident the tracker has never seen.
+func (t *Tracker) Reset(label, fingerprint string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	inc, ok := t.incidents[key{label: label, fingerprint: fingerprint}]
+	if !ok {
+		return
+	}
+	inc.Count = 0
+	inc.FirstSeen = time.Time{}
+	inc.LastExplainedAt = time.Time{}
+	inc.Explanation = nil
+	inc.ExplainErr = ""
+}
+
+// Lookup returns a snapshot of one incident, so a notification assembled
+// outside the observe path (a resolved tick) sees the same counters as the
+// stream did.
+func (t *Tracker) Lookup(label, fingerprint string) (Incident, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	inc, ok := t.incidents[key{label: label, fingerprint: fingerprint}]
+	if !ok {
+		return Incident{}, false
+	}
+	return *inc, true
+}
+
+// Len reports how many distinct incidents are tracked, for liveness reporting.
+func (t *Tracker) Len() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.incidents)
 }

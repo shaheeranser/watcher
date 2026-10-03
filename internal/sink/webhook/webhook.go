@@ -29,16 +29,15 @@ const defaultQueueSize = 256
 // Options configures a webhook sink. The unexported fields are test seams: a
 // fake clock, a recording sleep, and a deterministic jitter.
 type Options struct {
-	URL            string
-	Provider       string
-	Retries        int
-	BackoffBase    time.Duration
-	BackoffMax     time.Duration
-	Fallback       string
-	ThrottleWindow time.Duration
-	QueueSize      int
-	Logger         *slog.Logger
-	HTTPClient     *http.Client
+	URL         string
+	Provider    string
+	Retries     int
+	BackoffBase time.Duration
+	BackoffMax  time.Duration
+	Fallback    string
+	QueueSize   int
+	Logger      *slog.Logger
+	HTTPClient  *http.Client
 
 	now    func() time.Time
 	sleep  func(context.Context, time.Duration) bool
@@ -46,18 +45,18 @@ type Options struct {
 }
 
 // Webhook is a bounded, asynchronous webhook sink. Emit never blocks: it
-// throttles, then enqueues.
+// enqueues. Notification policy (what is worth sending, and when) is decided
+// upstream by the incident state machine, so this sink no longer throttles.
 type Webhook struct {
-	url      string
-	build    payloadBuilder
-	retries  int
-	base     time.Duration
-	max      time.Duration
-	spool    *spool
-	throttle *throttle
-	queue    chan sink.Result
-	client   *http.Client
-	log      *slog.Logger
+	url     string
+	build   payloadBuilder
+	retries int
+	base    time.Duration
+	max     time.Duration
+	spool   *spool
+	queue   chan sink.Result
+	client  *http.Client
+	log     *slog.Logger
 
 	now    func() time.Time
 	sleep  func(context.Context, time.Duration) bool
@@ -79,18 +78,17 @@ func New(ctx context.Context, opts Options) (*Webhook, error) {
 	}
 
 	w := &Webhook{
-		url:      opts.URL,
-		build:    build,
-		retries:  positiveOr(opts.Retries, 5),
-		base:     durationOr(opts.BackoffBase, time.Second),
-		max:      durationOr(opts.BackoffMax, 30*time.Second),
-		throttle: newThrottle(opts.ThrottleWindow),
-		queue:    make(chan sink.Result, positiveOr(opts.QueueSize, defaultQueueSize)),
-		client:   opts.HTTPClient,
-		log:      opts.Logger,
-		now:      timeOr(opts.now, time.Now),
-		sleep:    sleepOr(opts.sleep),
-		jitter:   floatOr(opts.jitter, rand.Float64),
+		url:     opts.URL,
+		build:   build,
+		retries: positiveOr(opts.Retries, 5),
+		base:    durationOr(opts.BackoffBase, time.Second),
+		max:     durationOr(opts.BackoffMax, 30*time.Second),
+		queue:   make(chan sink.Result, positiveOr(opts.QueueSize, defaultQueueSize)),
+		client:  opts.HTTPClient,
+		log:     opts.Logger,
+		now:     timeOr(opts.now, time.Now),
+		sleep:   sleepOr(opts.sleep),
+		jitter:  floatOr(opts.jitter, rand.Float64),
 	}
 	if w.client == nil {
 		w.client = &http.Client{}
@@ -108,13 +106,9 @@ func New(ctx context.Context, opts Options) (*Webhook, error) {
 
 func (w *Webhook) Name() string { return "webhook" }
 
-// Emit throttles per (label, fingerprint) and enqueues the notification. It
-// reports no error for a suppressed or dropped notification, because neither is
-// a failure of the caller.
+// Emit enqueues the notification. It reports no error for a dropped
+// notification, because a full queue is not a failure of the caller.
 func (w *Webhook) Emit(_ context.Context, r sink.Result) error {
-	if !w.throttle.allow(r.Source, r.Fingerprint, w.now()) {
-		return nil
-	}
 	w.enqueue(r)
 	return nil
 }

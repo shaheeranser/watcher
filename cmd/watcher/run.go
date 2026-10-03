@@ -97,7 +97,7 @@ func runDaemon(args []string) int {
 	}
 
 	isTerminal := sink.IsTerminal(os.Stdout)
-	sinks, err := buildSinks(ctx, cfg, isTerminal, logger)
+	localSink, notifySink, err := buildSinks(ctx, cfg, isTerminal, logger)
 	if err != nil {
 		logger.Error("cannot start sinks", "error", err)
 		return 1
@@ -106,16 +106,19 @@ func runDaemon(args []string) int {
 	logStartup(logger, cfg, sources, isTerminal)
 
 	eng := engine.New(engine.Options{
-		Sources:       sources,
-		Backend:       backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout, cfg.OllamaMaxTokens),
-		Sink:          sinks,
-		Logger:        logger,
-		ContextBefore: cfg.ContextBefore,
-		ContextAfter:  cfg.ContextAfter,
-		ContextBudget: cfg.ContextBudget,
-		MaxBlockLines: cfg.MaxBlockLines,
-		Workers:       cfg.Workers,
-		ExplainWindow: cfg.ExplainWindow,
+		Sources:        sources,
+		Backend:        backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout, cfg.OllamaMaxTokens),
+		Sink:           localSink,
+		Notifications:  notifySink,
+		Logger:         logger,
+		ContextBefore:  cfg.ContextBefore,
+		ContextAfter:   cfg.ContextAfter,
+		ContextBudget:  cfg.ContextBudget,
+		MaxBlockLines:  cfg.MaxBlockLines,
+		Workers:        cfg.Workers,
+		ExplainWindow:  cfg.ExplainWindow,
+		ThrottleWindow: cfg.ThrottleWindow,
+		ResolveWindow:  cfg.ResolveWindow,
 	})
 
 	if err := eng.Run(ctx); err != nil {
@@ -181,30 +184,28 @@ func configuredSources(cfg config.Config, log *slog.Logger) []source.Source {
 	return sources
 }
 
-// buildSinks assembles the terminal/JSON Lines sink and, when configured, the
-// webhook sink, fanning out so one failing sink cannot suppress the others.
-func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *slog.Logger) (sink.Sink, error) {
-	sinks := []sink.Sink{sink.New(os.Stdout, isTerminal)}
-	if cfg.WebhookURL != "" {
-		webhooks, err := webhook.New(ctx, webhook.Options{
-			URL:            cfg.WebhookURL,
-			Provider:       cfg.WebhookFormat,
-			Retries:        cfg.WebhookRetries,
-			BackoffBase:    cfg.WebhookBackoffBase,
-			BackoffMax:     cfg.WebhookBackoffMax,
-			Fallback:       cfg.WebhookFallback,
-			ThrottleWindow: cfg.ThrottleWindow,
-			Logger:         log,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("webhook sink: %w", err)
-		}
-		sinks = append(sinks, webhooks)
+// buildSinks assembles the local result stream (terminal or JSON Lines on
+// stdout) and, when configured, the notification channel. They are separate
+// outputs: the local stream reports every occurrence, while the notification
+// channel carries only the state machine's new/ongoing/resolved decisions.
+func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *slog.Logger) (local sink.Sink, notifications sink.Sink, err error) {
+	local = sink.New(os.Stdout, isTerminal)
+	if cfg.WebhookURL == "" {
+		return local, nil, nil
 	}
-	if len(sinks) == 1 {
-		return sinks[0], nil
+	webhooks, err := webhook.New(ctx, webhook.Options{
+		URL:         cfg.WebhookURL,
+		Provider:    cfg.WebhookFormat,
+		Retries:     cfg.WebhookRetries,
+		BackoffBase: cfg.WebhookBackoffBase,
+		BackoffMax:  cfg.WebhookBackoffMax,
+		Fallback:    cfg.WebhookFallback,
+		Logger:      log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("webhook sink: %w", err)
 	}
-	return sink.NewMulti(sinks...), nil
+	return local, webhooks, nil
 }
 
 // logStartup reports the sources attached and the sinks configured, so an

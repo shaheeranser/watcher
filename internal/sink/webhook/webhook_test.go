@@ -181,51 +181,6 @@ func TestEnqueueDropsOldestWhenQueueIsFull(t *testing.T) {
 	}
 }
 
-func TestThrottleSuppressesRepeatsWithinWindow(t *testing.T) {
-	th := newThrottle(15 * time.Minute)
-	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-
-	if !th.allow("a", "1", base) {
-		t.Fatal("the first notification must be allowed")
-	}
-	if th.allow("a", "1", base.Add(time.Minute)) {
-		t.Error("a repeat inside the window must be suppressed")
-	}
-	if !th.allow("a", "1", base.Add(16*time.Minute)) {
-		t.Error("after the window the notification must be allowed again")
-	}
-	if !th.allow("b", "1", base) {
-		t.Error("a different label is a different incident and must be allowed")
-	}
-}
-
-func TestZeroThrottleWindowNeverSuppresses(t *testing.T) {
-	th := newThrottle(0)
-	base := time.Now()
-	if !th.allow("a", "1", base) || !th.allow("a", "1", base) {
-		t.Error("a zero window must not throttle")
-	}
-}
-
-func TestEmitThrottlesRepeatedIncident(t *testing.T) {
-	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	w := &Webhook{
-		queue:    make(chan sink.Result, 4),
-		throttle: newThrottle(time.Minute),
-		now:      func() time.Time { return fixed },
-	}
-	r := fixtureResult()
-	if err := w.Emit(context.Background(), r); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Emit(context.Background(), r); err != nil {
-		t.Fatal(err)
-	}
-	if got := len(w.queue); got != 1 {
-		t.Errorf("queued = %d, want 1 (the repeat is throttled)", got)
-	}
-}
-
 func firstLine(data []byte) []byte {
 	for i, b := range data {
 		if b == '\n' {

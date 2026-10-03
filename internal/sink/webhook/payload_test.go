@@ -48,6 +48,20 @@ func unavailableResult() sink.Result {
 	}
 }
 
+func pendingResult() sink.Result {
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	return sink.Result{
+		Fingerprint:  "aaa111",
+		Kind:         "go-panic",
+		Source:       "backend",
+		Count:        1,
+		FirstSeen:    base,
+		LastSeen:     base,
+		Notification: "new",
+		Pending:      true,
+	}
+}
+
 func TestPayloadGoldens(t *testing.T) {
 	cases := []struct {
 		golden   string
@@ -58,6 +72,7 @@ func TestPayloadGoldens(t *testing.T) {
 		{"slack.json", "slack", fixtureResult()},
 		{"discord.json", "discord", fixtureResult()},
 		{"generic-unavailable.json", "generic", unavailableResult()},
+		{"generic-pending.json", "generic", pendingResult()},
 	}
 
 	for _, c := range cases {
@@ -109,6 +124,26 @@ func TestUnavailableExplanationIsExplicit(t *testing.T) {
 	}
 	if payload["confidence"] != nil {
 		t.Errorf("confidence = %v, want null when unavailable", payload["confidence"])
+	}
+}
+
+func TestPendingExplanationIsExplicit(t *testing.T) {
+	got, err := json.Marshal(genericPayloadFor(pendingResult()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["explanation_pending"] != true {
+		t.Errorf("explanation_pending = %v, want true: %s", payload["explanation_pending"], got)
+	}
+	if _, ok := payload["explanation_unavailable"]; ok {
+		t.Errorf("a pending notification is not unavailable: %s", got)
+	}
+	if payload["event"] != "new" {
+		t.Errorf("event = %v, want the notification kind new", payload["event"])
 	}
 }
 

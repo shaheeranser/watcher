@@ -8,11 +8,6 @@ import (
 	"github.com/shaheeranser/watcher/internal/sink"
 )
 
-// eventKind is the notification kind carried by every 01b payload. The
-// new/ongoing/resolved lifecycle is milestone 02's; until then every webhook
-// notification is an incident notification.
-const eventKind = "incident"
-
 // Provider length limits, from each service's documented caps.
 const (
 	slackHeaderLimit = 150
@@ -42,7 +37,8 @@ type genericPayload struct {
 	SuggestedFix           string   `json:"suggested_fix"`
 	Confidence             *float64 `json:"confidence"`
 	Model                  string   `json:"model"`
-	ExplanationUnavailable bool     `json:"explanation_unavailable"`
+	ExplanationPending     bool     `json:"explanation_pending,omitempty"`
+	ExplanationUnavailable bool     `json:"explanation_unavailable,omitempty"`
 	DeliveryError          string   `json:"delivery_error,omitempty"`
 }
 
@@ -61,9 +57,24 @@ func builderFor(format string) (payloadBuilder, error) {
 	}
 }
 
+// eventKindOf names the lifecycle stage a notification announces. A result with
+// no notification kind is a plain incident result from the local stream.
+func eventKindOf(r sink.Result) string {
+	if r.Notification != "" {
+		return r.Notification
+	}
+	return "incident"
+}
+
+// explanationPending reports whether the notification went out before the model
+// returned, as opposed to the model having failed outright.
+func explanationPending(r sink.Result) bool {
+	return r.Explanation == nil && (r.Pending || r.ExplainErr == "")
+}
+
 func genericPayloadFor(r sink.Result) genericPayload {
 	p := genericPayload{
-		Event:       eventKind,
+		Event:       eventKindOf(r),
 		Kind:        r.Kind,
 		Source:      r.Source,
 		Fingerprint: r.Fingerprint,
@@ -80,6 +91,8 @@ func genericPayloadFor(r sink.Result) genericPayload {
 		p.LikelyCause = e.LikelyCause
 		p.SuggestedFix = e.SuggestedFix
 		p.Confidence = &confidence
+	} else if explanationPending(r) {
+		p.ExplanationPending = true
 	} else {
 		p.ExplanationUnavailable = true
 	}
@@ -119,12 +132,16 @@ func discordPayload(r sink.Result) any {
 }
 
 func header(r sink.Result) string {
-	return fmt.Sprintf("[%s] %s on %s", strings.ToUpper(severityOf(r)), r.Kind, r.Source)
+	return fmt.Sprintf("[%s] %s on %s (%s)", strings.ToUpper(eventKindOf(r)), r.Kind, r.Source, severityOf(r))
 }
 
 func summaryLine(r sink.Result) string {
 	if r.Explanation == nil {
-		return fmt.Sprintf("%s — count %d, explanation unavailable", header(r), r.Count)
+		state := "explanation unavailable"
+		if explanationPending(r) {
+			state = "explanation pending"
+		}
+		return fmt.Sprintf("%s — count %d, %s", header(r), r.Count, state)
 	}
 	return fmt.Sprintf("%s — %s", header(r), r.Explanation.Summary)
 }
@@ -136,7 +153,7 @@ func body(r sink.Result) string {
 			fmt.Fprintf(&b, "%s: %s\n", label, value)
 		}
 	}
-	line("event", eventKind)
+	line("event", eventKindOf(r))
 	line("detector", r.Kind)
 	line("source", r.Source)
 	line("fingerprint", r.Fingerprint)
@@ -146,6 +163,10 @@ func body(r sink.Result) string {
 	line("last_seen", timestamp(r.LastSeen))
 
 	if r.Explanation == nil {
+		if explanationPending(r) {
+			line("summary", "explanation pending")
+			return strings.TrimRight(b.String(), "\n")
+		}
 		line("summary", "explanation unavailable")
 		line("reason", r.ExplainErr)
 		return strings.TrimRight(b.String(), "\n")

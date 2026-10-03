@@ -11,6 +11,5 @@
   "likely_cause": "the handler dereferenced a nil request",
   "suggested_fix": "guard the nil check",
   "confidence": 0.8,
-  "model": "qwen2.5-coder:0.5b",
-  "explanation_unavailable": false
+  "model": "qwen2.5-coder:0.5b"
 }
