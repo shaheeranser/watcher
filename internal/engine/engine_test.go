@@ -14,6 +14,7 @@ import (
 	"github.com/shaheeranser/watcher/internal/backend"
 	"github.com/shaheeranser/watcher/internal/sink"
 	"github.com/shaheeranser/watcher/internal/source"
+	"github.com/shaheeranser/watcher/internal/store"
 )
 
 type fakeSource struct {
@@ -610,4 +611,103 @@ func countNew(results []sink.Result) int {
 		}
 	}
 	return n
+}
+
+// fakeRecorder captures the persistence projection the engine emits.
+type fakeRecorder struct {
+	mu       sync.Mutex
+	upserts  []store.Upsert
+	explains []store.Explain
+	resolves []store.Resolve
+}
+
+func (f *fakeRecorder) Observe(u store.Upsert) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upserts = append(f.upserts, u)
+}
+
+func (f *fakeRecorder) Explain(e store.Explain) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.explains = append(f.explains, e)
+}
+
+func (f *fakeRecorder) Resolve(r store.Resolve) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolves = append(f.resolves, r)
+}
+
+func (f *fakeRecorder) snapshot() ([]store.Upsert, []store.Explain, []store.Resolve) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.Upsert(nil), f.upserts...),
+		append([]store.Explain(nil), f.explains...),
+		append([]store.Resolve(nil), f.resolves...)
+}
+
+func TestRecorderReceivesIncidentLifecycle(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	rec := &fakeRecorder{}
+	clock := &fakeClock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	src := &chanSource{name: "app.log", lines: make(chan string, 16)}
+
+	opts := baseOptions(src, be, &captureSink{})
+	opts.Recorder = rec
+	opts.Notifications = &captureSink{}
+	opts.ThrottleWindow = time.Minute
+	opts.ResolveWindow = 10 * time.Second
+	opts.resolveTick = 2 * time.Millisecond
+	opts.now = clock.Now
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	eng := New(opts)
+	go func() { done <- eng.Run(ctx) }()
+
+	send(src, goPanic)
+
+	// The creation is persisted before the explanation, so a UI shows the
+	// incident while the model is still working.
+	waitFor(t, func() bool {
+		upserts, _, _ := rec.snapshot()
+		for _, u := range upserts {
+			if u.Incident.State == store.StateNew && u.Incident.Count == 1 {
+				return true
+			}
+		}
+		return false
+	})
+	waitFor(t, func() bool {
+		_, explains, _ := rec.snapshot()
+		return len(explains) == 1
+	})
+
+	upserts, explains, _ := rec.snapshot()
+	if want := store.ID("app.log", upserts[0].Incident.Fingerprint); upserts[0].Incident.ID != want {
+		t.Errorf("persisted id = %q, want %q (source:fingerprint)", upserts[0].Incident.ID, want)
+	}
+	if explains[0].Explanation.Summary != validExplanation().Summary || explains[0].Explanation.Severity != "high" {
+		t.Errorf("persisted explanation = %+v", explains[0].Explanation)
+	}
+
+	// Going quiet past the resolve window persists the resolution with the count.
+	clock.Advance(11 * time.Second)
+	waitFor(t, func() bool {
+		_, _, resolves := rec.snapshot()
+		return len(resolves) == 1
+	})
+	_, _, resolves := rec.snapshot()
+	if resolves[0].Count != 1 || resolves[0].ID != upserts[0].Incident.ID {
+		t.Errorf("persisted resolution = %+v", resolves[0])
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
+	}
 }

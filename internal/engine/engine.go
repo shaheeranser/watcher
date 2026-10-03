@@ -20,6 +20,7 @@ import (
 	"github.com/shaheeranser/watcher/internal/incident"
 	"github.com/shaheeranser/watcher/internal/sink"
 	"github.com/shaheeranser/watcher/internal/source"
+	"github.com/shaheeranser/watcher/internal/store"
 )
 
 const defaultBuffer = 1024
@@ -51,6 +52,11 @@ type Options struct {
 	// push without stopping the state machine, so incident state still
 	// transitions for a read-only consumer.
 	Notifications sink.Sink
+
+	// Recorder, when set, persists incident history and state as the milestone-03
+	// dashboard's projection. It is a projection only: a nil recorder (or one
+	// whose writes fail) never changes detection or notification (DASH-26).
+	Recorder store.Recorder
 
 	// ThrottleWindow is the state machine's T (minimum interval between ongoing
 	// notifications); ResolveWindow is W (quiet period before resolved).
@@ -93,6 +99,7 @@ type Engine struct {
 	backend       backend.Backend
 	sink          sink.Sink
 	notifications sink.Sink
+	recorder      store.Recorder
 	tracker       *incident.Tracker
 	notifier      *incident.Notifier
 	log           *slog.Logger
@@ -138,6 +145,7 @@ func New(opts Options) *Engine {
 		backend:       opts.Backend,
 		sink:          opts.Sink,
 		notifications: opts.Notifications,
+		recorder:      opts.Recorder,
 		tracker:       incident.NewTracker(opts.ExplainWindow),
 		notifier:      incident.NewNotifier(opts.ThrottleWindow, opts.ResolveWindow),
 		log:           log,
@@ -344,6 +352,15 @@ func (e *Engine) handle(ctx context.Context, event detect.Event, out chan<- sink
 	}
 	inc, due := e.tracker.Observe(label, fp.Hash, event.Kind, now)
 
+	// Persist the occurrence and its current state before the model call, so the
+	// dashboard shows a new incident immediately even while its explanation is
+	// still pending (DASH-18, DASH-19).
+	state := store.StateOngoing
+	if obs.Fresh {
+		state = store.StateNew
+	}
+	e.recordObserve(inc, state, now)
+
 	// The notification goes out before the model call, so alert latency is
 	// independent of model latency; the explanation follows as a second
 	// notification when it lands (PROD-STM-8).
@@ -363,6 +380,7 @@ func (e *Engine) handle(ctx context.Context, event detect.Event, out chan<- sink
 		} else {
 			inc = e.tracker.RecordExplanation(label, fp.Hash, &explanation, e.backend.Model(), "")
 		}
+		e.recordExplanation(inc, e.now())
 		if kind, ok := e.notifier.Explained(label, fp.Hash, e.now()); ok {
 			e.push(ctx, inc, kind)
 		}
@@ -407,6 +425,77 @@ func (e *Engine) push(ctx context.Context, inc incident.Incident, kind incident.
 	e.notificationsSent.Add(1)
 }
 
+// recordObserve persists one occurrence. It is fire-and-forget: the recorder
+// queues the write, so nothing here can stall detection (DASH-NFR-2).
+func (e *Engine) recordObserve(inc incident.Incident, state store.State, at time.Time) {
+	if e.recorder == nil {
+		return
+	}
+	e.recorder.Observe(store.Upsert{Incident: recordOf(inc, state), OccurredAt: at})
+}
+
+// recordExplanation persists the outcome of one model call, successful or not,
+// so the dashboard can distinguish "still analysing" from "unavailable".
+func (e *Engine) recordExplanation(inc incident.Incident, at time.Time) {
+	if e.recorder == nil {
+		return
+	}
+	ex := store.Explanation{Model: inc.Model}
+	if inc.Explanation != nil {
+		ex.Summary = inc.Explanation.Summary
+		ex.LikelyCause = inc.Explanation.LikelyCause
+		ex.Evidence = inc.Explanation.Evidence
+		ex.SuggestedFix = inc.Explanation.SuggestedFix
+		ex.Confidence = inc.Explanation.Confidence
+		ex.Severity = inc.Explanation.Severity
+	}
+	ex.Error = inc.ExplainErr
+	e.recorder.Explain(store.Explain{
+		ID:          store.ID(inc.Source, inc.Fingerprint),
+		Fingerprint: inc.Fingerprint,
+		At:          at,
+		Explanation: ex,
+	})
+}
+
+// recordResolve marks an incident resolved with its final count.
+func (e *Engine) recordResolve(inc incident.Incident, at time.Time) {
+	if e.recorder == nil {
+		return
+	}
+	e.recorder.Resolve(store.Resolve{
+		ID:         store.ID(inc.Source, inc.Fingerprint),
+		ResolvedAt: at,
+		Count:      inc.Count,
+	})
+}
+
+// recordOf maps the tracker's incident onto the stored projection. State is the
+// notifier's decision, and the explanation fields come along so a list row can
+// show a summary or a pending/unavailable marker without a second read.
+func recordOf(inc incident.Incident, state store.State) store.Incident {
+	rec := store.Incident{
+		ID:          store.ID(inc.Source, inc.Fingerprint),
+		Fingerprint: inc.Fingerprint,
+		Kind:        inc.Kind,
+		Source:      inc.Source,
+		State:       state,
+		Count:       inc.Count,
+		FirstSeen:   inc.FirstSeen,
+		LastSeen:    inc.LastSeen,
+	}
+	switch {
+	case inc.Explanation != nil:
+		rec.Severity = inc.Explanation.Severity
+		rec.Summary = inc.Explanation.Summary
+		rec.HasExplanation = true
+	case inc.ExplainErr != "":
+		rec.HasExplanation = true
+		rec.ExplanationError = inc.ExplainErr
+	}
+	return rec
+}
+
 // resolveLoop announces incidents that have gone quiet. It runs on its own
 // ticker so resolution is not a function of incoming traffic.
 func (e *Engine) resolveLoop(ctx context.Context, tick time.Duration) {
@@ -417,11 +506,13 @@ func (e *Engine) resolveLoop(ctx context.Context, tick time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			for _, n := range e.notifier.Resolve(e.now()) {
+			now := e.now()
+			for _, n := range e.notifier.Resolve(now) {
 				inc, ok := e.tracker.Lookup(n.Label, n.Fingerprint)
 				if !ok {
 					continue
 				}
+				e.recordResolve(inc, now)
 				e.push(ctx, inc, n.Kind)
 			}
 		}
