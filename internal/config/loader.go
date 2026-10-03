@@ -50,6 +50,9 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	webhookBackoffMax := fs.Duration("webhook-backoff-max", cfg.WebhookBackoffMax, "upper bound on the retry delay")
 	webhookFallback := fs.String("webhook-fallback", cfg.WebhookFallback, "file that receives undeliverable notifications")
 	throttleWindow := fs.Duration("throttle-window", cfg.ThrottleWindow, "minimum interval between notifications for one (label, fingerprint)")
+	resolveWindow := fs.Duration("resolve-window", cfg.ResolveWindow, "quiet period before an incident is announced resolved")
+	heartbeatURL := fs.String("heartbeat-url", cfg.HeartbeatURL, "dead-man's-switch URL; empty disables the heartbeat")
+	heartbeatInterval := fs.Duration("heartbeat-interval", cfg.HeartbeatInterval, "interval between heartbeat pings")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
@@ -76,6 +79,9 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	cfg.WebhookBackoffMax = *webhookBackoffMax
 	cfg.WebhookFallback = *webhookFallback
 	cfg.ThrottleWindow = *throttleWindow
+	cfg.ResolveWindow = *resolveWindow
+	cfg.HeartbeatURL = *heartbeatURL
+	cfg.HeartbeatInterval = *heartbeatInterval
 
 	// A repeatable flag replaces the environment list outright rather than
 	// appending to it, so `--source` keeps the flag > env precedence.
@@ -135,6 +141,8 @@ func fromEnv(getenv func(string) string) (Config, error) {
 		{"WATCHER_WEBHOOK_BACKOFF_BASE", &cfg.WebhookBackoffBase},
 		{"WATCHER_WEBHOOK_BACKOFF_MAX", &cfg.WebhookBackoffMax},
 		{"WATCHER_THROTTLE_WINDOW", &cfg.ThrottleWindow},
+		{"WATCHER_RESOLVE_WINDOW", &cfg.ResolveWindow},
+		{"WATCHER_HEARTBEAT_INTERVAL", &cfg.HeartbeatInterval},
 	}
 	for _, e := range durations {
 		v, err := envDuration(getenv, e.name, *e.dst)
@@ -159,6 +167,9 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	}
 	if v := getenv("WATCHER_WEBHOOK_FALLBACK"); v != "" {
 		cfg.WebhookFallback = v
+	}
+	if v := getenv("WATCHER_HEARTBEAT_URL"); v != "" {
+		cfg.HeartbeatURL = v
 	}
 
 	v, err := envBool(getenv, "WATCHER_FROM_START", cfg.FromStart)

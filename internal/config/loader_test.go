@@ -35,20 +35,25 @@ func TestParsePrecedence(t *testing.T) {
 			name: "environment overrides defaults",
 			args: []string{"--model", "m"},
 			env: map[string]string{
-				"WATCHER_OLLAMA_URL":        "http://ollama:11434",
-				"WATCHER_CONTEXT_BEFORE":    "5",
-				"WATCHER_WORKERS":           "4",
-				"WATCHER_OLLAMA_TIMEOUT":    "5s",
-				"WATCHER_OLLAMA_MAX_TOKENS": "256",
-				"WATCHER_EXPLAIN_WINDOW":    "1m",
-				"WATCHER_FROM_START":        "true",
-				"WATCHER_MAX_BLOCK_LINES":   "50",
+				"WATCHER_OLLAMA_URL":         "http://ollama:11434",
+				"WATCHER_CONTEXT_BEFORE":     "5",
+				"WATCHER_WORKERS":            "4",
+				"WATCHER_OLLAMA_TIMEOUT":     "5s",
+				"WATCHER_OLLAMA_MAX_TOKENS":  "256",
+				"WATCHER_EXPLAIN_WINDOW":     "1m",
+				"WATCHER_FROM_START":         "true",
+				"WATCHER_MAX_BLOCK_LINES":    "50",
+				"WATCHER_RESOLVE_WINDOW":     "90s",
+				"WATCHER_HEARTBEAT_URL":      "https://hc-ping.example/abc",
+				"WATCHER_HEARTBEAT_INTERVAL": "30s",
 			},
 			want: func(c Config) bool {
 				return c.OllamaURL == "http://ollama:11434" && c.ContextBefore == 5 &&
 					c.Workers == 4 && c.OllamaTimeout == 5*time.Second &&
 					c.OllamaMaxTokens == 256 &&
-					c.ExplainWindow == time.Minute && c.FromStart && c.MaxBlockLines == 50
+					c.ExplainWindow == time.Minute && c.FromStart && c.MaxBlockLines == 50 &&
+					c.ResolveWindow == 90*time.Second &&
+					c.HeartbeatURL == "https://hc-ping.example/abc" && c.HeartbeatInterval == 30*time.Second
 			},
 		},
 		{
@@ -244,6 +249,12 @@ func TestParseRuntimeDefaults(t *testing.T) {
 	if got.ThrottleWindow != 15*time.Minute {
 		t.Errorf("throttle-window = %s, want 15m", got.ThrottleWindow)
 	}
+	if got.ResolveWindow != DefaultResolveWindow {
+		t.Errorf("resolve-window = %s, want %s", got.ResolveWindow, DefaultResolveWindow)
+	}
+	if got.HeartbeatURL != "" || got.HeartbeatInterval != DefaultHeartbeatInterval {
+		t.Errorf("heartbeat defaults = %q/%s, want disabled at %s", got.HeartbeatURL, got.HeartbeatInterval, DefaultHeartbeatInterval)
+	}
 	if got.ContainersSet {
 		t.Error("containers should be unset by default")
 	}
@@ -312,6 +323,21 @@ func TestParseValidationRuntime(t *testing.T) {
 			name:    "negative throttle window",
 			args:    []string{"--model", "m", "--throttle-window", "-1s"},
 			wantSub: "throttle-window must not be negative",
+		},
+		{
+			name:    "resolve window must be positive",
+			args:    []string{"--model", "m", "--resolve-window", "0s"},
+			wantSub: "resolve-window must be positive",
+		},
+		{
+			name:    "heartbeat interval must be positive",
+			args:    []string{"--model", "m", "--heartbeat-interval", "0s"},
+			wantSub: "heartbeat-interval must be positive",
+		},
+		{
+			name:    "bad heartbeat url",
+			args:    []string{"--model", "m", "--heartbeat-url", "ftp://example.com"},
+			wantSub: "heartbeat-url",
 		},
 		{
 			name:    "source without label",

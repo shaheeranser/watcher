@@ -22,6 +22,15 @@ const DefaultDockerHost = "unix:///var/run/docker.sock"
 // spooled as one JSON line, so a wedged receiver never loses the report.
 const DefaultWebhookFallback = "undelivered.jsonl"
 
+// DefaultResolveWindow is how long an incident must be quiet before it is
+// announced resolved. It clears Docker's restart backoff (at most a minute), so
+// a genuine restart loop is never misread as resolved.
+const DefaultResolveWindow = 2 * time.Minute
+
+// DefaultHeartbeatInterval is how often the dead-man's-switch ping is sent when
+// a heartbeat URL is configured.
+const DefaultHeartbeatInterval = 60 * time.Second
+
 // StdinPath is the pseudo-path that names standard input in a source spec, so a
 // file source and stdin can be configured side by side.
 const StdinPath = "-"
@@ -118,8 +127,17 @@ type Config struct {
 	WebhookBackoffMax  time.Duration
 	WebhookFallback    string
 
-	// ThrottleWindow caps how often one (label, fingerprint) may notify.
+	// ThrottleWindow is the notification state machine's T: the minimum interval
+	// between ongoing notifications for one incident. ResolveWindow is W: how
+	// long an incident is quiet before it is announced resolved.
 	ThrottleWindow time.Duration
+	ResolveWindow  time.Duration
+
+	// HeartbeatURL enables the dead-man's-switch ping when non-empty;
+	// HeartbeatInterval is its cadence. The heartbeat is disabled by default so
+	// a run only pings somewhere when it was asked to.
+	HeartbeatURL      string
+	HeartbeatInterval time.Duration
 }
 
 // Default returns the compiled-in settings. Model is intentionally empty; see
@@ -144,6 +162,8 @@ func Default() Config {
 		WebhookBackoffMax:  30 * time.Second,
 		WebhookFallback:    DefaultWebhookFallback,
 		ThrottleWindow:     15 * time.Minute,
+		ResolveWindow:      DefaultResolveWindow,
+		HeartbeatInterval:  DefaultHeartbeatInterval,
 	}
 }
 
@@ -201,7 +221,11 @@ func (c Config) Validate() error {
 	if c.ThrottleWindow < 0 {
 		errs = append(errs, fmt.Errorf("throttle-window must not be negative, got %s", c.ThrottleWindow))
 	}
+	if c.ResolveWindow <= 0 {
+		errs = append(errs, fmt.Errorf("resolve-window must be positive, got %s", c.ResolveWindow))
+	}
 	errs = append(errs, c.validateWebhook()...)
+	errs = append(errs, c.validateHeartbeat()...)
 	errs = append(errs, c.validateSources()...)
 	return errors.Join(errs...)
 }
@@ -225,6 +249,19 @@ func (c Config) validateWebhook() []error {
 	if c.WebhookURL != "" {
 		if u, err := url.Parse(c.WebhookURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			errs = append(errs, fmt.Errorf("webhook-url %q must be an http or https URL", c.WebhookURL))
+		}
+	}
+	return errs
+}
+
+func (c Config) validateHeartbeat() []error {
+	var errs []error
+	if c.HeartbeatInterval <= 0 {
+		errs = append(errs, fmt.Errorf("heartbeat-interval must be positive, got %s", c.HeartbeatInterval))
+	}
+	if c.HeartbeatURL != "" {
+		if u, err := url.Parse(c.HeartbeatURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			errs = append(errs, fmt.Errorf("heartbeat-url %q must be an http or https URL", c.HeartbeatURL))
 		}
 	}
 	return errs
