@@ -299,26 +299,43 @@ documented JSONL field set and the two ground-truth file shapes.
 - **Robustness** — a results file with unknown fields and junk lines parses,
   reports the junk count, and still scores.
 
-## 9. Open decisions
+## 9. Resolved decisions
 
-- **OD-04-1** — Default similarity metric and threshold `τ`. Dice-on-tokens vs.
-  trigram weighting, and where the cutoff sits, materially change pass rates;
-  this should be calibrated against a real corpus before being fixed.
-- **OD-04-2** — Default `min_pass_rate` (or the default verdict when it is
-  unset).
-- **OD-04-3** — Whether `expected_cause` should also support a controlled
-  vocabulary of canonical labels plus synonyms (strict label matching) as an
-  alternative to free-text similarity.
-- **OD-04-4** — The tie-break rule when one identifier maps to multiple results
-  (severity → confidence → earliest is proposed).
-- **OD-04-5** — Whether a kind mismatch should fail the case by default rather
-  than only under `--require-kind`.
-- **OD-04-6** — The exact env var / flag name for the run id, and whether it
-  should also be accepted as a per-line field on stdin (a tagged input stream).
-- **OD-04-7** — Whether to emit an additional slide-ready artifact (Markdown
-  table or image) directly, or leave slide rendering to the harness.
-- **OD-04-8** — Whether severity should weight the score (a missed `critical`
-  counting more than a missed `low`) rather than every case counting equally.
-- **OD-04-9** — Whether `watcher eval` should optionally read a run's history
-  from the `../03-dashboard/design.md` database instead of a JSONL file, for
-  scoring a long-lived daemon rather than a single-shot run.
+These were the open decisions for this milestone. Each is now fixed and the
+implementation follows it; the resolution and its reasoning are recorded here so
+the next reader does not have to rediscover them.
+
+- **OD-04-1 — Metric and threshold τ.** The metric is
+  `max(token-set Dice, character-trigram Dice)` as specified in §4.2, with a
+  default **τ = 0.60** (the example value) configurable via `--threshold`. The
+  default is *documented as uncalibrated*: it has not been tuned against a real
+  corpus, so a harness that cares about the exact cutoff sets its own.
+- **OD-04-2 — Default verdict when `min_pass_rate` is unset.** Report-only:
+  `watcher eval` prints the pass rate and exits 0 when no gate is configured.
+  The gate applies only when `--min-pass-rate` is supplied. This matches the
+  harness's own `evaluate.py`, which gates only when asked.
+- **OD-04-3 — Canonical-label vocabulary.** Not implemented. Free-text
+  similarity is the whole scoring model; strict label matching is a possible
+  future milestone, not part of this one.
+- **OD-04-4 — Multi-result tie-break.** Adopted as proposed: highest severity,
+  then highest confidence, then earliest `first_seen`; the remaining results for
+  that identifier are recorded as extras in the report.
+- **OD-04-5 — Kind mismatch default.** A `kind_mismatch` is recorded but fails
+  only under `--require-kind`. The category is reported distinctly from a cause
+  mismatch either way.
+- **OD-04-6 — Run-id input.** The run identifier comes from the `WATCHER_RUN_ID`
+  environment variable or the `--run-id` flag on `watcher run`, and is echoed as
+  an omitempty `run_id` field on every emitted result. There is no per-line
+  tagged-input field.
+- **OD-04-7 — Extra slide artifact.** Not implemented. The text tally is the
+  slide-ready output; rendering images or Markdown tables is left to the harness.
+- **OD-04-8 — Severity weighting.** Not implemented. Every case counts equally.
+- **OD-04-9 — Scoring from the dashboard database.** Not implemented. The results
+  side is the JSON Lines stream only.
+
+**Counting note.** A ground-truth entry with no result (`no_result`) is counted
+as a failure in the pass-rate denominator, and is also listed under
+`unmatched.truth_only`. This follows `EVAL-MATCH-3` ("a failure, not silently
+dropped") and matches the harness, so a run that explained nothing cannot pass.
+The illustrative example in §5.1 is arithmetically inconsistent on this point;
+the requirement and the harness win.
