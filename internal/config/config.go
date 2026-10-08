@@ -131,6 +131,11 @@ type Config struct {
 	// at the current end.
 	FromStart bool
 
+	// RunID identifies this invocation for evaluation. When set it is echoed on
+	// every result so a harness can key ground truth on its own scenario ids
+	// (EVAL-MATCH-2). Empty means no run id is attached.
+	RunID string
+
 	// Containers is the Docker source selector. Empty means the default scope
 	// (Watcher's own Compose project); ContainersDisabled turns it off.
 	Containers string

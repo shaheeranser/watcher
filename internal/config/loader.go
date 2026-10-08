@@ -36,6 +36,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	explainWindow := fs.Duration("explain-window", cfg.ExplainWindow, "minimum interval between explanations of one fingerprint")
 	maxBlockLines := fs.Int("max-block-lines", cfg.MaxBlockLines, "maximum lines kept in a crash block")
 	fromStart := fs.Bool("from-start", cfg.FromStart, "read a file source from the beginning instead of the end")
+	runID := fs.String("run-id", cfg.RunID, "run identifier echoed on every result for evaluation")
 
 	sources := &sourceListValue{}
 	fs.Var(sources, "source", "labeled log source, label=path (repeatable; path '-' is stdin)")
@@ -75,6 +76,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	cfg.ExplainWindow = *explainWindow
 	cfg.MaxBlockLines = *maxBlockLines
 	cfg.FromStart = *fromStart
+	cfg.RunID = *runID
 	cfg.DockerHost = *dockerHost
 	cfg.DockerSince = *dockerSince
 	cfg.WebhookURL = *webhookURL
@@ -111,6 +113,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	cfg := Default()
 	cfg.File = getenv("WATCHER_FILE")
 	cfg.Model = getenv("WATCHER_MODEL")
+	cfg.RunID = getenv("WATCHER_RUN_ID")
 	if v := getenv("WATCHER_OLLAMA_URL"); v != "" {
 		cfg.OllamaURL = v
 	}

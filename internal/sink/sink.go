@@ -23,6 +23,11 @@ type Result struct {
 	ExplainErr  string
 	Model       string
 
+	// RunID is the harness-supplied identifier for the producing invocation,
+	// echoed on every result so an evaluation can key ground truth on its own
+	// scenario ids (EVAL-MATCH-2). It is empty when no run id is configured.
+	RunID string
+
 	// Notification is the lifecycle kind (new/ongoing/resolved) on the
 	// notification channel. It is empty on the local result stream, which
 	// reports every occurrence rather than the notification policy.

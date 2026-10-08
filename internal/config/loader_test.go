@@ -85,6 +85,32 @@ func TestParsePrecedence(t *testing.T) {
 	}
 }
 
+func TestParseRunID(t *testing.T) {
+	got, err := Parse([]string{"--model", "m"}, envFrom(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != "" {
+		t.Errorf("run-id = %q, want empty by default", got.RunID)
+	}
+
+	got, err = Parse([]string{"--model", "m"}, envFrom(map[string]string{"WATCHER_RUN_ID": "run-014"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != "run-014" {
+		t.Errorf("run-id = %q, want run-014 from environment", got.RunID)
+	}
+
+	got, err = Parse([]string{"--model", "m", "--run-id", "run-flag"}, envFrom(map[string]string{"WATCHER_RUN_ID": "run-014"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RunID != "run-flag" {
+		t.Errorf("run-id = %q, want the flag to win", got.RunID)
+	}
+}
+
 func TestParseValidation(t *testing.T) {
 	tests := []struct {
 		name    string

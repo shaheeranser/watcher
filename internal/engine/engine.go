@@ -63,6 +63,10 @@ type Options struct {
 	ThrottleWindow time.Duration
 	ResolveWindow  time.Duration
 
+	// RunID, when set, is echoed on every local result so an evaluation can
+	// correlate incidents with the harness's own scenario ids (EVAL-MATCH-2).
+	RunID string
+
 	Buffer int
 
 	// now is a test seam so the state machine's windows can be exercised
@@ -106,6 +110,7 @@ type Engine struct {
 	workers       int
 	buffer        int
 	now           func() time.Time
+	runID         string
 
 	resolveWindow time.Duration
 	resolveTick   time.Duration
@@ -152,6 +157,7 @@ func New(opts Options) *Engine {
 		workers:       workers,
 		buffer:        buffer,
 		now:           now,
+		runID:         opts.RunID,
 		resolveWindow: opts.ResolveWindow,
 		resolveTick:   opts.resolveTick,
 		contextBefore: opts.ContextBefore,
@@ -396,6 +402,7 @@ func (e *Engine) handle(ctx context.Context, event detect.Event, out chan<- sink
 		Explanation: inc.Explanation,
 		ExplainErr:  inc.ExplainErr,
 		Model:       inc.Model,
+		RunID:       e.runID,
 	})
 }
 

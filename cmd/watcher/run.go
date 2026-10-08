@@ -81,6 +81,7 @@ Flags (environment variable in parentheses):
   --explain-window DUR    min interval between explanations of one crash (WATCHER_EXPLAIN_WINDOW; default 15m)
   --max-block-lines N     maximum lines kept per crash block (WATCHER_MAX_BLOCK_LINES; default 200)
   --from-start            read a file from the beginning (WATCHER_FROM_START; default false)
+  --run-id ID             identifier echoed on every result for the eval verb (WATCHER_RUN_ID)
 
 Results go to stdout as text on a terminal or JSON Lines otherwise. All
 diagnostics go to stderr.`
@@ -159,6 +160,7 @@ func runDaemon(args []string) int {
 		ExplainWindow:  cfg.ExplainWindow,
 		ThrottleWindow: cfg.ThrottleWindow,
 		ResolveWindow:  cfg.ResolveWindow,
+		RunID:          cfg.RunID,
 	}
 	if webhookSink != nil {
 		opts.Notifications = webhookSink

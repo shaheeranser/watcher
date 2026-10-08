@@ -140,6 +140,24 @@ var goPanic = []string{
 	"exit status 2",
 }
 
+func TestRunIDEchoedOnLocalResults(t *testing.T) {
+	be := &fakeBackend{resp: validExplanation()}
+	snk := &captureSink{}
+	opts := baseOptions(&fakeSource{name: "stdin", lines: goPanic}, be, snk)
+	opts.RunID = "run-014"
+
+	if err := New(opts).Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	results := snk.all()
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	if results[0].RunID != "run-014" {
+		t.Errorf("result run id = %q, want run-014", results[0].RunID)
+	}
+}
+
 func TestEndToEndJSONLShape(t *testing.T) {
 	var buf bytes.Buffer
 	be := &fakeBackend{resp: validExplanation()}

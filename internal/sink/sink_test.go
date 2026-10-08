@@ -128,3 +128,27 @@ func TestJSONLMarkersForUnavailable(t *testing.T) {
 		t.Errorf("jsonl must emit exactly one line per result: %q", out)
 	}
 }
+
+func TestJSONLRunID(t *testing.T) {
+	t.Run("present when set", func(t *testing.T) {
+		var buf bytes.Buffer
+		r := fullResult()
+		r.RunID = "run-014"
+		if err := NewJSONL(&buf).Emit(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), `"run_id":"run-014"`) {
+			t.Errorf("missing run_id: %s", buf.String())
+		}
+	})
+
+	t.Run("absent when empty", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := NewJSONL(&buf).Emit(context.Background(), fullResult()); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(buf.String(), "run_id") {
+			t.Errorf("run_id must be omitted when unset: %s", buf.String())
+		}
+	})
+}

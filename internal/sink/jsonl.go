@@ -51,6 +51,7 @@ type jsonRecord struct {
 	Confidence             float64  `json:"confidence"`
 	Severity               string   `json:"severity"`
 	Model                  string   `json:"model"`
+	RunID                  string   `json:"run_id,omitempty"`
 	ExplanationUnavailable bool     `json:"explanation_unavailable,omitempty"`
 	Error                  string   `json:"error,omitempty"`
 }
@@ -74,6 +75,7 @@ func jsonRecordFrom(r Result) jsonRecord {
 		Confidence:   confidence,
 		Severity:     severity,
 		Model:        r.Model,
+		RunID:        r.RunID,
 	}
 	if r.Explanation == nil {
 		record.ExplanationUnavailable = true
