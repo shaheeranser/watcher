@@ -16,6 +16,7 @@ import (
 var verbs = map[string]func([]string) int{
 	"run":    runDaemon,
 	"attach": attachCommand,
+	"eval":   evalCommand,
 }
 
 func main() {
