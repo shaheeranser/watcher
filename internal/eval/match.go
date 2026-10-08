@@ -64,7 +64,7 @@ func correlate(cases []Case, results []Result, id Identifier) ([]Chosen, Unmatch
 
 	chosen := make([]Chosen, len(cases))
 	truthKeys := make(map[string]bool, len(cases))
-	var truthOnly []string
+	truthOnly := []string{}
 	for i, c := range cases {
 		truthKeys[c.ID] = true
 		bucket := byKey[c.ID]
@@ -94,6 +94,9 @@ func correlate(cases []Case, results []Result, id Identifier) ([]Chosen, Unmatch
 		}
 	}
 	sort.Strings(resultsOnly)
+	if resultsOnly == nil {
+		resultsOnly = []string{}
+	}
 
 	return chosen, Unmatched{TruthOnly: truthOnly, ResultsOnly: resultsOnly}
 }

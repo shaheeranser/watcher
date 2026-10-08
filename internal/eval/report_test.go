@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +66,22 @@ func TestReportJSONGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkGolden(t, "report.golden.json", string(data))
+}
+
+func TestEmptyUnmatchedRendersAsArrays(t *testing.T) {
+	report := Score(Options{
+		Cases:      []Case{{ID: "a", ExpectedCause: "x"}},
+		Results:    []Result{{RunID: "a", LikelyCause: "x"}},
+		Identifier: ByRunID,
+		Threshold:  0.6,
+	})
+	data, err := report.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"truth_only": []`) || !strings.Contains(string(data), `"results_only": []`) {
+		t.Errorf("empty unmatched lists must render as arrays, not null:\n%s", data)
+	}
 }
 
 func TestJSONAndCSVTruthAgree(t *testing.T) {
