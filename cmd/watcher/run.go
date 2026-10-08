@@ -32,11 +32,13 @@ Usage:
   watcher run [flags]              start the daemon (the long-running process)
   watcher     [flags]              alias for 'watcher run'
   watcher attach [flags]           attach a live dashboard to a running daemon
+  watcher eval [flags]             score a captured run against ground truth
   watcher --help                   list the verbs and run's flags
 
 Verbs:
   run                              read the configured sources and report crashes
   attach                           render a running daemon's incident history
+  eval                             score explanations against ground truth
 
 Dashboard:
   The daemon is always headless and serves a read API over a Unix socket; the

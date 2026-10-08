@@ -266,7 +266,7 @@ dead-man's-switch URL, so Watcher's own silence is itself detectable.
       heartbeat)
 - [x] `03` — Dashboard (headless daemon, read API, `watcher attach` TUI, SQLite
       history)
-- [ ] `04` — Evaluation (ground-truth scoring, pass/fail tally)
+- [x] `04` — Evaluation (ground-truth scoring, pass/fail tally)
 - [ ] `05` — Install lifecycle (installer, `watcher onboard`, config file,
       systemd unit)
 
@@ -289,20 +289,94 @@ documented ground-truth root cause in `scenarios/*.json`:
 | `restart-loop` | Startup config validation throws before `listen()`; Docker restart-loops the byte-identical crash. |
 | `timeout` | `POST /api/bulk` buffers a body with no size limit and exhausts the V8 heap. |
 
-The harness scores Watcher by pointing its `evaluate.py` at Watcher's output —
-a captured JSON Lines file or a URL — so the two repos share no code:
+The two repos share no code. The harness can score Watcher by pointing its own
+`evaluate.py` at Watcher's output, and Watcher can score a captured run itself
+with `watcher eval`:
 
 ```sh
 ./bin/watcher run --file victim.log --model <model> > results.jsonl
 ./evaluate.py --watcher results.jsonl --runs 5 --report reports/latest.md
+./bin/watcher eval --truth truth.json --results results.jsonl --identifier run_id
 ```
 
-`evaluate.py` accepts a JSON array, JSON Lines, or a single object (a webhook
-payload works too) and finds `likely_cause` in each record. In-repo scoring
-(`watcher eval`) is specified in
-[`specs/04-evaluation/design.md`](./specs/04-evaluation/design.md) §7 but is not
-implemented yet; until it is, the harness scores with its own script. See
-`docs/victim/` for per-run notes on the harness.
+### In-repo scoring — `watcher eval`
+
+`watcher eval` scores Watcher's own explanations against an external
+ground-truth file. It is a pure, offline second entry point: it reads two plain
+files, performs no detection, and never calls the model, so a captured run is
+re-scorable without Ollama or the daemon
+([`specs/04-evaluation`](./specs/04-evaluation)):
+
+```sh
+watcher eval \
+  --truth   truth.json|truth.csv \
+  --results results.jsonl|- \
+  [--identifier fingerprint|run_id] \
+  [--truth-format json|csv] \
+  [--threshold 0.60] \
+  [--min-pass-rate 0.60] \
+  [--require-kind] \
+  [--format text|json|both]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--truth` | the ground-truth file (format inferred from `.json`/`.csv`, or set with `--truth-format`) |
+| `--results` | Watcher's JSON Lines stream, or `-` for stdin, so `watcher … \| watcher eval …` works |
+| `--identifier` | correlate on `fingerprint`, or on `run_id` (the default) |
+| `--threshold` | similarity cutoff τ; a case passes at or above it (default `0.60`, not yet corpus-calibrated) |
+| `--min-pass-rate` | CI gate: exit non-zero below this rate; unset means report-only |
+| `--require-kind` | fail a case whose detector kind differs from the expected kind |
+| `--format` | `text` (slide-ready tally), `json` (CI report), or `both` |
+
+Causes are compared by the maximum of token-set Dice and character-trigram Dice
+after normalizing case, punctuation, whitespace, and stopwords, so paraphrases
+and morphological variants still score. Each case is classified as `pass`,
+`cause_mismatch`, `no_explanation`, `no_result`, or `kind_mismatch`, and every
+case's raw score is recorded, so a stored run can be re-thresholded without
+re-running anything. The exit code is `0` when the pass rate meets
+`--min-pass-rate` (or when no gate is given), `1` when it does not, and `2` for
+a usage or input error.
+
+#### Run-id mode
+
+The recommended mode tags one producing invocation with a run id, which is
+echoed on every incident so ground truth can key on the harness's own scenario
+names:
+
+```sh
+WATCHER_RUN_ID=run-014 watcher run --file scenario-014.log --model <model> > results.jsonl
+```
+
+`--run-id` does the same on the command line. Fingerprint mode keys ground truth
+on the emitted `fingerprint` field instead, which suits a fixed corpus.
+
+#### Ground-truth format
+
+The ground-truth file is plain and documented; no harness internals are involved
+([`design.md`](./specs/04-evaluation/design.md) §3.1). JSON accepts a bare object
+mapping an id to its expected cause, or a `cases` array with an optional
+detector kind:
+
+```json
+{"cases": [
+  {"id": "run-014", "expected_cause": "nil pointer dereference in config loader", "kind": "go-panic"}
+]}
+```
+
+```json
+{"run-014": "nil pointer dereference in config loader"}
+```
+
+CSV uses an `id,expected_cause[,kind]` header; unknown columns are ignored:
+
+```csv
+id,expected_cause,kind
+run-014,"nil pointer dereference in config loader",go-panic
+```
+
+A malformed, empty, or duplicate-id ground-truth file fails with a clear error
+and a non-zero exit. See `docs/victim/` for per-run notes on the harness.
 
 ### Live procedure
 
@@ -332,6 +406,13 @@ default, so no selector is needed. Expected result: a per-scenario PASS/FAIL
 table and a pass rate, with each incident line carrying a `likely_cause` the
 scorer reads. The same output can be pushed to Slack/Discord by adding
 `--webhook-url` and `--webhook-format`.
+
+To score that capture in-repo, launch each scenario with a distinct
+`WATCHER_RUN_ID` (see above) and point `watcher eval` at the same file:
+
+```sh
+./bin/watcher eval --truth truth.json --results /tmp/watcher-victim.jsonl --identifier run_id
+```
 
 ## Contributing
 
