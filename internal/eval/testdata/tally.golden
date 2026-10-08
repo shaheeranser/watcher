@@ -1,0 +1,27 @@
+Watcher evaluation — 7 cases   (identifier: run_id, τ = 0.60)
+
+  PASS 3 / 7   42.9%        gate: >= 60.0%  →  FAIL
+
+  by detector kind
+    generic-fatal      0/3      0.0%
+    go-panic           2/3     66.7%
+    python-traceback   1/1    100.0%
+    no explanation     0/1      0.0%
+
+  Failures (4)
+    run-003  —              sim 0.00  no_explanation
+      expected: upstream timeout from billing API
+      actual:   (explanation unavailable)
+    run-004  generic-fatal  sim 0.00  cause_mismatch
+      expected: disk full writing WAL
+      actual:   permission denied on /var/lib/app
+    run-005  —              sim 0.00  no_result
+      expected: send on closed channel
+      actual:   (no result produced)
+    run-007  —              sim 0.00  no_result
+      expected: restart loop from bad config
+      actual:   (no result produced)
+
+  Unmatched
+    truth only (no result produced): run-005, run-007
+    results only (no truth entry):   run-099

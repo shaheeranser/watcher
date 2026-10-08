@@ -1,0 +1,9 @@
+{"cases":[
+  {"id":"run-001","expected_cause":"nil pointer dereference in config loader","kind":"go-panic"},
+  {"id":"run-002","expected_cause":"unhandled KeyError 'user_id' in worker","kind":"python-traceback"},
+  {"id":"run-003","expected_cause":"upstream timeout from billing API","kind":"generic-fatal"},
+  {"id":"run-004","expected_cause":"disk full writing WAL","kind":"generic-fatal"},
+  {"id":"run-005","expected_cause":"send on closed channel","kind":"go-panic"},
+  {"id":"run-006","expected_cause":"panic in background worker","kind":"go-panic"},
+  {"id":"run-007","expected_cause":"restart loop from bad config","kind":"generic-fatal"}
+]}

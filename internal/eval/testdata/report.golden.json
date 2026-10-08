@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "identifier": "run_id",
+  "threshold": 0.6,
+  "min_pass_rate": 0.6,
+  "total": 7,
+  "passed": 3,
+  "failed": 4,
+  "pass_rate": 0.4286,
+  "verdict": "fail",
+  "by_kind": {
+    "generic-fatal": {
+      "total": 3,
+      "passed": 0
+    },
+    "go-panic": {
+      "total": 3,
+      "passed": 2
+    },
+    "no_explanation": {
+      "total": 1,
+      "passed": 0
+    },
+    "python-traceback": {
+      "total": 1,
+      "passed": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "run-001",
+      "category": "pass",
+      "score": 1,
+      "expected_cause": "nil pointer dereference in config loader",
+      "actual_cause": "nil pointer dereference in config loader",
+      "expected_kind": "go-panic",
+      "actual_kind": "go-panic",
+      "kind_match": true,
+      "extras": 1
+    },
+    {
+      "id": "run-002",
+      "category": "pass",
+      "score": 1,
+      "expected_cause": "unhandled KeyError 'user_id' in worker",
+      "actual_cause": "unhandled KeyError 'user_id' in the worker",
+      "expected_kind": "python-traceback",
+      "actual_kind": "python-traceback",
+      "kind_match": true
+    },
+    {
+      "id": "run-003",
+      "category": "no_explanation",
+      "score": 0,
+      "expected_cause": "upstream timeout from billing API",
+      "actual_cause": null,
+      "explanation_error": "ollama: no response"
+    },
+    {
+      "id": "run-004",
+      "category": "cause_mismatch",
+      "score": 0,
+      "expected_cause": "disk full writing WAL",
+      "actual_cause": "permission denied on /var/lib/app",
+      "expected_kind": "generic-fatal",
+      "actual_kind": "generic-fatal",
+      "kind_match": true
+    },
+    {
+      "id": "run-005",
+      "category": "no_result",
+      "score": 0,
+      "expected_cause": "send on closed channel",
+      "actual_cause": null
+    },
+    {
+      "id": "run-006",
+      "category": "kind_mismatch",
+      "score": 1,
+      "expected_cause": "panic in background worker",
+      "actual_cause": "panic in background worker",
+      "expected_kind": "go-panic",
+      "actual_kind": "generic-fatal",
+      "kind_match": false
+    },
+    {
+      "id": "run-007",
+      "category": "no_result",
+      "score": 0,
+      "expected_cause": "restart loop from bad config",
+      "actual_cause": null
+    }
+  ],
+  "unmatched": {
+    "truth_only": [
+      "run-005",
+      "run-007"
+    ],
+    "results_only": [
+      "run-099"
+    ]
+  }
+}

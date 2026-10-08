@@ -1,0 +1,8 @@
+id,expected_cause,kind
+run-001,"nil pointer dereference in config loader",go-panic
+run-002,"unhandled KeyError 'user_id' in worker",python-traceback
+run-003,"upstream timeout from billing API",generic-fatal
+run-004,"disk full writing WAL",generic-fatal
+run-005,"send on closed channel",go-panic
+run-006,"panic in background worker",go-panic
+run-007,"restart loop from bad config",generic-fatal
