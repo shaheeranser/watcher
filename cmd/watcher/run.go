@@ -119,6 +119,7 @@ func runDaemon(args []string) int {
 	}
 
 	isTerminal := sink.IsTerminal(os.Stdout)
+	hintOnboarding(logger, cfg, isTerminal)
 	localSink, webhookSink, err := buildSinks(ctx, cfg, isTerminal, logger)
 	if err != nil {
 		logger.Error("cannot start sinks", "error", err)
@@ -363,6 +364,20 @@ func buildSinks(ctx context.Context, cfg config.Config, isTerminal bool, log *sl
 		return nil, nil, fmt.Errorf("webhook sink: %w", err)
 	}
 	return local, webhooks, nil
+}
+
+// hintOnboarding nudges a first-run user toward `watcher onboard`: an
+// interactive terminal, no config file, and nothing to watch. It names the verb
+// on stderr and never blocks waiting for input (INST-ONB-13, OD-05-7).
+func hintOnboarding(log *slog.Logger, cfg config.Config, isTerminal bool) {
+	if !isTerminal || cfg.ConfigFileLoaded {
+		return
+	}
+	if len(cfg.ResolvedSources()) > 0 || cfg.ContainersSet {
+		return
+	}
+	log.Info("no sources configured and no config file; reading stdin",
+		"hint", "run `watcher onboard` to configure a model, sources, and a webhook")
 }
 
 // logStartup reports the sources attached, the sinks configured, the state-

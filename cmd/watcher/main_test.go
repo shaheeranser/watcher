@@ -1,11 +1,28 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/shaheeranser/watcher/internal/config"
 )
+
+// TestMain keeps config resolution hermetic: no test should read the
+// developer's real ~/.config/watcher/config.toml.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "watcher-cmd-test")
+	if err == nil {
+		os.Setenv("XDG_CONFIG_HOME", dir)
+	}
+	code := m.Run()
+	if err == nil {
+		os.RemoveAll(dir)
+	}
+	os.Exit(code)
+}
 
 type spyDaemon struct {
 	called bool
@@ -168,6 +185,32 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestHintOnboarding(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      config.Config
+		terminal bool
+		want     bool
+	}{
+		{"first run on a terminal", config.Config{}, true, true},
+		{"not a terminal", config.Config{}, false, false},
+		{"config file loaded", config.Config{ConfigFileLoaded: true}, true, false},
+		{"source configured", config.Config{Sources: []config.SourceSpec{{Label: "a", Path: "/a.log"}}}, true, false},
+		{"docker scope set", config.Config{Containers: "project=x", ContainersSet: true}, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			hintOnboarding(log, tt.cfg, tt.terminal)
+			got := strings.Contains(buf.String(), "watcher onboard")
+			if got != tt.want {
+				t.Errorf("hint = %v, want %v (output: %q)", got, tt.want, buf.String())
+			}
+		})
+	}
 }
 
 func silenceStderr(t *testing.T) {
