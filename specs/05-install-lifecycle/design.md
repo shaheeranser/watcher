@@ -241,18 +241,60 @@ equivalent of the Compose `environment:` block, and neither replaces the other.
   then `watcher run` reads the config and starts, and reports an incident from a
   fixture log.
 
-## 9. Open decisions
+## 9. Decisions
 
-- **OD-05-1** — Default install directory and whether the installer prefers
-  per-user (no root) or system-wide.
-- **OD-05-2** — Whether uninstall removes the config file by default or only on
-  an explicit flag.
-- **OD-05-3** — Release artifact naming/versioning and where checksums are
-  published (GitHub Releases, a `checksums.txt`, etc.).
-- **OD-05-4** — launchd/macOS support: whether, and in which milestone.
-- **OD-05-5** — Where a webhook secret lives: inside `config.toml` (mode `0600`)
-  or a separate secret file referenced by path.
-- **OD-05-6** — The exact config-file key schema (mirror env var names vs nested
-  sections such as `[webhook]`).
-- **OD-05-7** — Whether `watcher run`'s first-run hint (INST-ONB-13) should also
-  offer to launch onboarding directly, or only name it.
+These were open when the milestone was drafted. They are now resolved; the values
+below are what the implementation uses, with the reasoning recorded so a later
+milestone can revisit a choice rather than rediscover it.
+
+- **OD-05-1 — Default install directory and per-user vs system.** *Resolved:*
+  system `/usr/local/bin`, with the installer run under `sudo`; a per-user
+  `~/.local/bin` install is available with `WATCHER_INSTALL_DIR` and needs no
+  root (INST-PKG-7). A system install pairs with the system systemd unit this
+  design already specifies and matches the "runs at boot" lifecycle; a per-user
+  install would need a `systemctl --user` unit instead.
+- **OD-05-2 — Uninstall and the config file.** *Resolved:* uninstall removes the
+  binary and the unit, and removes the config file only with an explicit
+  `--purge`. This is already what INST-PKG-5 requires; no separate default is
+  introduced.
+- **OD-05-3 — Release artifacts and checksums.** *Resolved:* GitHub Releases,
+  built by a tag-triggered workflow. Assets are `watcher_<os>_<arch>.tar.gz`,
+  `checksums.txt`, and `watcher.service`; the asset names carry no version, so
+  the installer builds both the `latest` and a pinned URL by plain construction,
+  with no GitHub API call, and verifies the tarball (and the unit, for
+  `--service`) against `checksums.txt`.
+- **OD-05-4 — launchd/macOS.** *Resolved:* not built here. macOS gets the
+  binary; onboarding skips the service step where systemd is absent, per §7.
+- **OD-05-5 — Where the webhook secret lives.** *Resolved:* in `config.toml`,
+  written mode `0600`. The webhook URL is already carried in plain environment
+  in the container shape, and one file the operator can inspect is simpler than
+  a second secret-path indirection; the `0600` mode keeps it from being
+  world-readable.
+- **OD-05-6 — Config key schema.** *Resolved:* the nested shape from §3.1 —
+  top-level scalars, `[[sources]]` as an array of `{label, path}` tables, and
+  the `[docker]`, `[webhook]`, `[incident]`, `[heartbeat]`, and `[api]` sections
+  for the grouped settings. It reads better than mirroring the env var names and
+  keeps related keys together.
+- **OD-05-7 — The first-run hint.** *Resolved:* it names `watcher onboard` and
+  nothing more. INST-ONB-13 forbids blocking for input, so offering to launch
+  onboarding from the hint would contradict the requirement.
+
+### Additional decisions
+
+- **TOML dependency.** The config file uses `github.com/BurntSushi/toml`. TOML
+  has no standard-library parser, and a hand-rolled one is a bug farm; this
+  decoder is small, cgo-free (preserving the static `CGO_ENABLED=0` binary), and
+  reports line/position and undecoded keys, which is exactly what INST-CFG-4's
+  "name the file and the problem" needs.
+- **Recommended default model.** Onboarding pre-fills `qwen2.5:1.5b`. It is the
+  model the 01b live harness scored best on the crashing stack
+  (`docs/victim/01b-live-harness.md`: `qwen2.5-coder:0.5b` scored 0/5, unable to
+  close its output, and `qwen2.5:1.5b` scored 3/5). It is a pre-fill only:
+  `run` still requires an explicit model (OD-01-1).
+- **Config written before the unit is enabled.** §4.1's diagram enables the unit
+  before writing the config; that would start `watcher run` with no model and
+  fail. The implementation validates, writes `config.toml`, installs the unit,
+  then `enable --now`s it.
+- **Onboarding I/O on stderr.** Prompts and messages go to stderr, keeping stdout
+  free; onboarding's product is the config file on disk, not a stream result.
+

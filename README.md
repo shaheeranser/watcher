@@ -6,9 +6,84 @@ and error events on its own, and uses a small self-hosted model (via
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Quickstart
+## Install
 
-Build from source (Go 1.26 or newer):
+On Linux or macOS, install the released binary — no Go toolchain, compiler, or
+build step:
+
+```sh
+curl -fsSL https://github.com/shaheeranser/watcher/releases/latest/download/install.sh | sudo sh
+```
+
+The installer detects the host OS and architecture, verifies the download against
+the published checksum, and installs `watcher` to `/usr/local/bin`. Set
+`WATCHER_INSTALL_DIR="$HOME/.local/bin"` for a per-user install that needs no root.
+
+### First-run configuration — `watcher onboard`
+
+Onboarding is optional: a run can be configured entirely with flags and
+environment variables instead. When you do want it, it takes a bare-metal machine
+from "just installed" to "running in the background" in one pass:
+
+```sh
+watcher onboard
+```
+
+It prompts for the Ollama URL — verifying it is reachable *before* writing
+anything — a model, one or more labelled log sources, and an optional webhook,
+then writes `~/.config/watcher/config.toml` (mode `0600`) and offers to install
+and enable the systemd unit. It never infers what to watch and refuses to run
+inside a container, where the Compose `environment:` block is the configuration.
+
+### Run in the background
+
+If you accepted the unit during onboarding:
+
+```sh
+systemctl enable --now watcher      # start now and at boot
+systemctl status watcher
+```
+
+Otherwise run it in the foreground and let your own supervisor manage it:
+
+```sh
+watcher run
+```
+
+Watcher never self-daemonizes: no double-fork, no `setsid`, no PID file. It always
+runs in the foreground and relies on the platform for backgrounding.
+
+The unit is minimal and can also be installed by hand — save it to
+`/etc/systemd/system/watcher.service`, then `sudo systemctl daemon-reload &&
+sudo systemctl enable --now watcher`:
+
+```ini
+[Unit]
+Description=Watcher
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/watcher run
+Restart=always
+RestartSec=2
+Type=simple
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Uninstall
+
+```sh
+curl -fsSL https://github.com/shaheeranser/watcher/releases/latest/download/install.sh | sudo sh -s -- --uninstall
+```
+
+That removes the binary and the unit. The config file is left in place unless you
+add `--purge`.
+
+## Build from source
+
+Go 1.26 or newer:
 
 ```sh
 git clone https://github.com/shaheeranser/watcher
@@ -23,8 +98,10 @@ ollama serve
 ollama pull <model>
 ```
 
-> Watcher never bundles or defaults a model — naming one is a deployment
-> decision. Pass `--model` (or set `WATCHER_MODEL`); startup fails without it.
+> Watcher never bundles or defaults a model for `run` — naming one is a deployment
+> decision. Pass `--model` (or set `WATCHER_MODEL`, or configure it in the config
+> file); startup fails without it. `watcher onboard` only *pre-fills* a suggested
+> model, which you accept or replace.
 
 ### Watch stdin
 
@@ -63,11 +140,14 @@ machine-readable incident stream:
 
 ## Configuration
 
-Every setting can be given as a flag or an environment variable, with the flag
-winning when both are present (flag > environment > default).
+Every setting can be given as a flag, an environment variable, or the config file,
+resolved as `flag > environment > config file > default`. No config file is needed:
+without one, Watcher runs on flags, environment variables, and compiled-in defaults
+exactly as before.
 
 | Setting | Flag | Env | Default |
 |---|---|---|---|
+| Config file | `--config` | `WATCHER_CONFIG` | `$XDG_CONFIG_HOME/watcher/config.toml` |
 | Source file | `--file` | `WATCHER_FILE` | stdin |
 | Labeled sources | `--source LABEL=PATH` | `WATCHER_SOURCES` | — |
 | Docker scope | `--containers` | `WATCHER_CONTAINERS` | own Compose project |
@@ -105,6 +185,38 @@ winning when both are present (flag > environment > default).
 WATCHER_MODEL=qwen2.5-coder:0.5b \
   ./bin/watcher --file /var/log/app.log --ollama-url http://ollama:11434
 ```
+
+### Config file
+
+The file lives at `$XDG_CONFIG_HOME/watcher/config.toml`, falling back to
+`~/.config/watcher/config.toml`, and is overridable with `--config` or
+`WATCHER_CONFIG`. `watcher onboard` writes it; here is the same configuration by
+hand:
+
+```toml
+# ~/.config/watcher/config.toml
+model = "qwen2.5:1.5b"
+ollama_url = "http://localhost:11434"
+
+[[sources]]
+label = "backend"
+path = "/var/log/backend/app.log"
+
+[[sources]]
+label = "worker"
+path = "/var/log/worker/app.log"
+
+[webhook]
+url = "https://discord.com/api/webhooks/…"
+format = "discord"
+```
+
+Every flag has a key: the detector and Ollama scalars at the top level, `sources`
+as an array of `{label, path}` tables, and the `[docker]`, `[webhook]`,
+`[incident]`, `[heartbeat]`, and `[api]` sections for their groups. An absent file
+is not an error; a malformed file, unknown key, or invalid value fails startup
+naming the file and the problem. Because the file can hold a webhook secret,
+`onboard` writes it mode `0600`.
 
 ## Dashboard
 
@@ -267,7 +379,7 @@ dead-man's-switch URL, so Watcher's own silence is itself detectable.
 - [x] `03` — Dashboard (headless daemon, read API, `watcher attach` TUI, SQLite
       history)
 - [x] `04` — Evaluation (ground-truth scoring, pass/fail tally)
-- [ ] `05` — Install lifecycle (installer, `watcher onboard`, config file,
+- [x] `05` — Install lifecycle (installer, `watcher onboard`, config file,
       systemd unit)
 
 Detailed design documentation for each milestone lives in
