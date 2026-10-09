@@ -9,14 +9,26 @@ import (
 	"time"
 )
 
-// Parse resolves settings from args and the environment, then validates the
-// result. getenv is injected so tests can supply a fake environment.
+// Parse resolves settings from args, the environment, and the config file, then
+// validates the result. getenv is injected so tests can supply a fake
+// environment.
 //
-// Precedence is flag > env > default: environment values seed the flag
-// defaults, so an explicit flag always wins.
+// Precedence is flag > env > file > default: the config file seeds the values,
+// the environment overrides only what it sets, and an explicit flag wins over
+// both. An absent config file leaves the compiled-in defaults untouched
+// (INST-CFG-2, INST-CFG-3).
 func Parse(args []string, getenv func(string) string) (Config, error) {
-	cfg, err := fromEnv(getenv)
+	cfg := Default()
+
+	path := configPathFromArgs(args, getenv)
+	loaded, err := loadConfigFile(&cfg, path)
 	if err != nil {
+		return Config{}, err
+	}
+	cfg.ConfigPath = path
+	cfg.ConfigFileLoaded = loaded
+
+	if err := applyEnv(&cfg, getenv); err != nil {
 		return Config{}, err
 	}
 
@@ -24,6 +36,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 
+	config := fs.String("config", path, "path to the TOML configuration file")
 	file := fs.String("file", cfg.File, "log file to tail; empty reads stdin")
 	ollamaURL := fs.String("ollama-url", cfg.OllamaURL, "base URL of the Ollama server")
 	model := fs.String("model", cfg.Model, "Ollama model name (required)")
@@ -64,6 +77,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("parse flags: %w", err)
 	}
 
+	cfg.ConfigPath = *config
 	cfg.File = *file
 	cfg.OllamaURL = *ollamaURL
 	cfg.Model = *model
@@ -101,28 +115,64 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		cfg.Sources = sources.specs
 	}
 	cfg.Containers = containers.value
-	cfg.ContainersSet = cfg.containersFromEnv || containers.set
+	cfg.ContainersSet = cfg.containersFromFile || cfg.containersFromEnv || containers.set
 
 	if err := cfg.Validate(); err != nil {
+		// A bad value merged from the file is reported with the file named, so
+		// the operator knows which rung to fix (INST-CFG-4).
+		if loaded {
+			return Config{}, fmt.Errorf("config file %s: %w", path, err)
+		}
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-func fromEnv(getenv func(string) string) (Config, error) {
-	cfg := Default()
-	cfg.File = getenv("WATCHER_FILE")
-	cfg.Model = getenv("WATCHER_MODEL")
-	cfg.RunID = getenv("WATCHER_RUN_ID")
+// configPathFromArgs resolves the config-file path with the usual precedence:
+// an explicit --config wins, then WATCHER_CONFIG, then the platform default.
+func configPathFromArgs(args []string, getenv func(string) string) string {
+	for i := 0; i < len(args); i++ {
+		name, value, hasValue := strings.Cut(args[i], "=")
+		if name != "--config" && name != "-config" {
+			continue
+		}
+		if hasValue {
+			return value
+		}
+		if i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	if v := getenv("WATCHER_CONFIG"); v != "" {
+		return v
+	}
+	return DefaultConfigPath(getenv)
+}
+
+// applyEnv overlays the environment onto cfg in place. Every value is applied
+// only when its variable is set, so a value from the config file survives an
+// unset variable and the environment still wins over the file (INST-CFG-2).
+func applyEnv(cfg *Config, getenv func(string) string) error {
+	if v := getenv("WATCHER_FILE"); v != "" {
+		cfg.File = v
+	}
+	if v := getenv("WATCHER_MODEL"); v != "" {
+		cfg.Model = v
+	}
+	if v := getenv("WATCHER_RUN_ID"); v != "" {
+		cfg.RunID = v
+	}
 	if v := getenv("WATCHER_OLLAMA_URL"); v != "" {
 		cfg.OllamaURL = v
 	}
 
-	specs, err := parseSourceList(getenv("WATCHER_SOURCES"))
-	if err != nil {
-		return Config{}, err
+	if raw := getenv("WATCHER_SOURCES"); raw != "" {
+		specs, err := parseSourceList(raw)
+		if err != nil {
+			return err
+		}
+		cfg.Sources = specs
 	}
-	cfg.Sources = specs
 
 	ints := []struct {
 		name string
@@ -140,7 +190,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	for _, e := range ints {
 		v, err := envInt(getenv, e.name, *e.dst)
 		if err != nil {
-			return Config{}, err
+			return err
 		}
 		*e.dst = v
 	}
@@ -162,7 +212,7 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	for _, e := range durations {
 		v, err := envDuration(getenv, e.name, *e.dst)
 		if err != nil {
-			return Config{}, err
+			return err
 		}
 		*e.dst = v
 	}
@@ -189,23 +239,24 @@ func fromEnv(getenv func(string) string) (Config, error) {
 	if v := getenv("WATCHER_DB"); v != "" {
 		cfg.DBPath = v
 	}
-	cfg.APISocket = defaultSocket(getenv)
 	if v := getenv("WATCHER_API_SOCKET"); v != "" {
 		cfg.APISocket = v
+	} else if !cfg.socketFromFile {
+		cfg.APISocket = defaultSocket(getenv)
 	}
 
 	fromStart, err := envBool(getenv, "WATCHER_FROM_START", cfg.FromStart)
 	if err != nil {
-		return Config{}, err
+		return err
 	}
 	cfg.FromStart = fromStart
 
 	apiEnabled, err := envBool(getenv, "WATCHER_API", cfg.APIEnabled)
 	if err != nil {
-		return Config{}, err
+		return err
 	}
 	cfg.APIEnabled = apiEnabled
-	return cfg, nil
+	return nil
 }
 
 // sourceListValue collects repeatable --source flags. It records whether any

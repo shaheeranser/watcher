@@ -57,6 +57,13 @@ const DefaultRefreshInterval = 2 * time.Second
 // takes, with the detail pane taking the rest.
 const DefaultListFraction = 0.45
 
+// DefaultConfigDirName is the per-user directory, under the config home, that
+// holds the config file.
+const DefaultConfigDirName = "watcher"
+
+// ConfigFileName is the base name of the TOML config file.
+const ConfigFileName = "config.toml"
+
 // StdinPath is the pseudo-path that names standard input in a source spec, so a
 // file source and stdin can be configured side by side.
 const StdinPath = "-"
@@ -182,6 +189,17 @@ type Config struct {
 	DBPath        string
 	Retention     time.Duration
 	OccurrenceCap int
+
+	// ConfigPath is the resolved config-file path and ConfigFileLoaded records
+	// whether it existed and was read, so a run can tell a genuinely
+	// unconfigured first start from one that used a file (INST-ONB-13).
+	ConfigPath       string
+	ConfigFileLoaded bool
+
+	// socketFromFile and containersFromFile note that the config file supplied
+	// the value, so the environment's own defaulting does not clobber it.
+	socketFromFile     bool
+	containersFromFile bool
 }
 
 // Default returns the compiled-in settings. Model is intentionally empty; see
