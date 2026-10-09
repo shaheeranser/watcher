@@ -14,9 +14,10 @@ import (
 // verbs is the single registration point for subcommands. A new verb (onboard,
 // eval) is added here and nowhere else; the grammar is fixed once.
 var verbs = map[string]func([]string) int{
-	"run":    runDaemon,
-	"attach": attachCommand,
-	"eval":   evalCommand,
+	"run":     runDaemon,
+	"onboard": onboardCommand,
+	"attach":  attachCommand,
+	"eval":    evalCommand,
 }
 
 func main() {

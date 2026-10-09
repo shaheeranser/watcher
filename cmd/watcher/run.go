@@ -31,12 +31,14 @@ const usage = `watcher explains application crashes from one or more log sources
 Usage:
   watcher run [flags]              start the daemon (the long-running process)
   watcher     [flags]              alias for 'watcher run'
+  watcher onboard [flags]          configure a bare-metal install interactively
   watcher attach [flags]           attach a live dashboard to a running daemon
   watcher eval [flags]             score a captured run against ground truth
   watcher --help                   list the verbs and run's flags
 
 Verbs:
   run                              read the configured sources and report crashes
+  onboard                          write a config file for a run (bare metal only)
   attach                           render a running daemon's incident history
   eval                             score explanations against ground truth
 
