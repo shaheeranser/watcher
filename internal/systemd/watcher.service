@@ -1,0 +1,12 @@
+[Unit]
+Description=Watcher
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/watcher run
+Restart=always
+RestartSec=2
+Type=simple
+
+[Install]
+WantedBy=multi-user.target
