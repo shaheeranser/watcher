@@ -93,8 +93,8 @@ stateDiagram-v2
     [*] --> New: first occurrence
     New --> Ongoing: occurrence, throttle elapsed
     Ongoing --> Ongoing: occurrence, throttled (count only)
-    New --> Resolved: quiet for W (resolve window)
-    Ongoing --> Resolved: quiet for W (resolve window)
+    New --> Resolved: quiet for W and explanation settled
+    Ongoing --> Resolved: quiet for W and explanation settled
     Resolved --> New: occurrence (fresh cycle)
 ```
 
@@ -106,8 +106,9 @@ stateDiagram-v2
   (PROD-STM-2, PROD-STM-5). This is the anti-spam rule: a crash loop produces
   one incident with a rising count.
 - `Resolved` — a single ticker evaluates all active incidents; when
-  `now - lastSeen >= W` it emits one `resolved` notification with the final
-  count and marks the incident resolved (PROD-STM-3).
+  `now - lastSeen >= W` **and no explanation is still in flight** it emits one
+  `resolved` notification with the final count and marks the incident resolved
+  (PROD-STM-3, PROD-STM-10).
 - After `Resolved`, a further occurrence restarts the cycle at `New`
   (PROD-STM-4), so a genuinely recurring problem is not permanently silenced.
 
@@ -146,8 +147,16 @@ latency is never a function of model latency.
 Because the alert deliberately leaves without its explanation, one follow-up
 `ongoing` notification carries the explanation when the model returns, so the
 two facts arrive as two events rather than one that waited. The follow-up is
-owed once per pending notification and is skipped if the incident resolved in
-the meantime.
+owed once per pending notification.
+
+The follow-up must still be deliverable when it lands. If the incident went
+quiet and the resolve ticker fired first, the follow-up was suppressed and the
+diagnosis was lost after the alert had already promised it. So resolution is
+deferred while an explanation is in flight: the resolve ticker skips any
+incident that still owes a follow-up, and the `resolved` notification — which
+now always carries the explanation or an explicit unavailable marker — is held
+until the model settles (PROD-STM-10). The delay is bounded by the backend's
+own retry budget, since the model call always returns.
 
 ### 3.5 Which sinks the state machine gates
 
@@ -201,6 +210,9 @@ Payload:
 | Resolve window W | `--resolve-window` | `WATCHER_RESOLVE_WINDOW` | `2m` (OD-02-2) |
 | Heartbeat URL | `--heartbeat-url` | `WATCHER_HEARTBEAT_URL` | none |
 | Heartbeat interval | `--heartbeat-interval` | `WATCHER_HEARTBEAT_INTERVAL` | `60s` (OD-02-3) |
+| Model request timeout | `--ollama-timeout` | `WATCHER_OLLAMA_TIMEOUT` | `120s` (OD-02-6) |
+| Attempts per explanation | `--ollama-attempts` | `WATCHER_OLLAMA_ATTEMPTS` | `3` (OD-02-6) |
+| Model keep-alive | `--ollama-keep-alive` | `WATCHER_OLLAMA_KEEP_ALIVE` | `30m` (OD-02-6) |
 
 `--throttle-window` was introduced in 01b (`RT-CFG-1`); this milestone is
 where it stops being a stop-gap and becomes the state machine's `T`.
@@ -210,6 +222,8 @@ where it stops being a stop-gap and becomes the state machine's `T`.
 | Failure | Behavior |
 |---------|----------|
 | Ollama down | Incident still notified with `explanation_pending` |
+| Model slower than W | Resolution is deferred until the explanation settles, so the `resolved` notification carries it (PROD-STM-10) |
+| Model exceeds the request timeout | That attempt is not retried (a retry repeats the same too-slow generation); the incident is reported with an unavailable marker |
 | Heartbeat endpoint down | Log, skip, continue; next ping is the signal |
 | Clock skew across containers | Timestamps come from Watcher's own clock, never from container logs |
 | Notification queue saturated | 01b's drop-oldest policy applies; detection unaffected |
@@ -221,7 +235,8 @@ Docker-source and webhook-delivery failure modes are 01b's (see
 
 - **State machine** — table-driven tests with an injectable clock covering:
   first occurrence, suppressed repeats, throttled `ongoing`, `resolved`,
-  recurrence after resolve, and restart-without-spurious-resolve.
+  recurrence after resolve, restart-without-spurious-resolve, and deferral of
+  resolution while an explanation is in flight (PROD-STM-10).
 - **Heartbeat** — fake clock + `httptest`; assert cadence independence from
   incident traffic.
 - **Packaging** — brought up locally: the stack reaches healthy with the model
@@ -258,13 +273,31 @@ later milestone can revisit a choice rather than rediscover it.
   resolution starts a fresh cycle (PROD-STM-4), so its count restarts at one and
   its first-seen time is the new cycle's; a lifetime cumulative count would make
   "now at N" misleading after the incident was announced resolved.
+- **OD-02-6 — Model timeout, attempts, and keep-alive defaults.** *Resolved:*
+  timeout `120s`, attempts `3`, keep-alive `30m`. A CPU-only box running a small
+  model takes well over a minute per explanation, so the earlier `60s` default
+  reported slow-but-successful explanations as unavailable; `120s` leaves the
+  model room to finish. Retrying is kept for transient failures but a timeout is
+  terminal — a retry reproduces the same too-slow generation and only lengthens
+  the wait (refining CORE-BE-6, which asks only for *bounded* retry/backoff).
+  Keep-alive is longer than the explanation window so an active incident never
+  pays a cold model load between calls.
+- **OD-02-7 — Defer `resolved` while an explanation is in flight.** *Resolved:*
+  defer. The `new`/`ongoing` alert deliberately leaves without its explanation,
+  so a resolution that lands first would drop the promised follow-up and the
+  incident would be announced resolved with no cause. Holding the resolution is
+  bounded by the backend's retry budget and makes PROD-STM-8's pending marker
+  deliver something rather than dead-ending.
 
 One deviation from §3.1 worth recording: the diagram has no transition for the
 explanation arriving. The implementation adds one follow-up `ongoing`
 notification that carries the explanation after a pending `new`/`ongoing` alert,
 so the alert is immediate *and* the diagnosis still reaches the channel (§3.4).
 It is bounded — one follow-up per pending notification — and is the mechanism
-that makes STM-8's pending marker useful rather than a dead end.
+that makes STM-8's pending marker useful rather than a dead end. A second
+deviation, PROD-STM-10, guards the same mechanism on the way out: resolution
+waits for that follow-up to settle so the `resolved` message cannot be the one
+that strands it.
 
 Moved to `../01b-runtime/design.md` §12 with their mechanisms: the Docker client
 dependency choice (was OD-02-6), the Docker lookback default (was OD-02-8), the

@@ -49,6 +49,9 @@ builds on.
 - [x] **T-2.9** — Retire 01b's standalone throttle gating so this state machine
       is the only delivery policy. *(PROD-STM-9)*
 - [x] **T-2.10** — Tests with an injectable clock covering all transitions.
+- [x] **T-2.11** — Defer `resolved` while a pending explanation is in flight, so
+      the notification carries the cause. *(PROD-STM-10)*
+- [x] **T-2.12** — Test the deferral at both the state-machine and engine levels.
 
 ## 3. Heartbeat
 
@@ -69,6 +72,9 @@ builds on.
       windows) to stderr. *(PROD-NFR-4)*
 - [x] **T-4.3** — Bound memory for the notification queue and heartbeat path.
       *(PROD-NFR-2)*
+- [x] **T-4.4** — Tune the model-call budget for slow CPU boxes: timeout,
+      attempts (a timeout is not retried), and keep-alive, with startup
+      diagnostics. *(PROD-NFR-3, PROD-NFR-4, OD-02-6)*
 
 ## 5. Integration
 

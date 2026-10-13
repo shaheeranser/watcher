@@ -62,8 +62,9 @@ interfaces defined in `../01-core-engine/requirements.md` and extended by
   one `ongoing` notification per throttle window, reporting the current
   cumulative count.
 - **PROD-STM-3** — WHEN no occurrence of a fingerprint has been observed for
-  the resolve window, THE SYSTEM SHALL emit exactly one `resolved`
-  notification carrying the final count.
+  the resolve window and its explanation has settled, THE SYSTEM SHALL emit
+  exactly one `resolved` notification carrying the final count and the
+  explanation if one was requested.
 - **PROD-STM-4** — WHEN a fingerprint recurs after being resolved, THE SYSTEM
   SHALL begin a fresh notification cycle and emit a `new` notification.
 - **PROD-STM-5** — THE SYSTEM SHALL record every occurrence for counting
@@ -78,6 +79,11 @@ interfaces defined in `../01-core-engine/requirements.md` and extended by
 - **PROD-STM-9** — This state machine SHALL replace 01b's minimal
   per-incident notification throttle; once it is active, that throttle SHALL no
   longer gate delivery independently.
+- **PROD-STM-10** — WHEN an incident has been quiet for the resolve window but
+  its explanation is still in flight, THE SYSTEM SHALL defer the `resolved`
+  notification until the explanation settles, so the notification carries the
+  cause (or an explicit unavailable marker) instead of leaving an explanation to
+  arrive after the incident has resolved and be dropped.
 
 ### 3.3 Heartbeat
 
