@@ -80,8 +80,10 @@ Flags (environment variable in parentheses):
   --context-after N       context lines after a crash (WATCHER_CONTEXT_AFTER; default 10)
   --context-budget BYTES  excerpt size budget (WATCHER_CONTEXT_BUDGET; default 8192)
   --workers N             concurrent model calls (WATCHER_WORKERS; default 1)
-  --ollama-timeout DUR    per-request timeout (WATCHER_OLLAMA_TIMEOUT; default 60s)
+  --ollama-timeout DUR    per-request timeout (WATCHER_OLLAMA_TIMEOUT; default 120s)
   --ollama-max-tokens N   tokens the model may generate per request (WATCHER_OLLAMA_MAX_TOKENS; default 512)
+  --ollama-keep-alive DUR how long Ollama holds the model loaded between calls (WATCHER_OLLAMA_KEEP_ALIVE; default 30m; 0 uses the server default)
+  --ollama-attempts N     attempts per explanation; a timeout is not retried (WATCHER_OLLAMA_ATTEMPTS; default 3)
   --explain-window DUR    min interval between explanations of one crash (WATCHER_EXPLAIN_WINDOW; default 15m)
   --max-block-lines N     maximum lines kept per crash block (WATCHER_MAX_BLOCK_LINES; default 200)
   --from-start            read a file from the beginning (WATCHER_FROM_START; default false)
@@ -152,8 +154,16 @@ func runDaemon(args []string) int {
 	logStartup(logger, cfg, sources, isTerminal, history.Persistent())
 
 	opts := engine.Options{
-		Sources:        sources,
-		Backend:        backend.NewOllama(cfg.OllamaURL, cfg.Model, cfg.OllamaTimeout, cfg.OllamaMaxTokens),
+		Sources: sources,
+		Backend: backend.NewOllama(backend.OllamaOptions{
+			BaseURL:     cfg.OllamaURL,
+			Model:       cfg.Model,
+			Timeout:     cfg.OllamaTimeout,
+			MaxTokens:   cfg.OllamaMaxTokens,
+			KeepAlive:   cfg.OllamaKeepAlive,
+			MaxAttempts: cfg.OllamaAttempts,
+			Logger:      logger,
+		}),
 		Sink:           localSink,
 		Recorder:       history,
 		Logger:         logger,
@@ -414,6 +424,9 @@ func logStartup(log *slog.Logger, cfg config.Config, sources []source.Source, is
 		"sinks", strings.Join(sinkNames, ", "),
 		"model", cfg.Model,
 		"ollama_url", cfg.OllamaURL,
+		"ollama_timeout", cfg.OllamaTimeout,
+		"ollama_attempts", cfg.OllamaAttempts,
+		"ollama_keep_alive", cfg.OllamaKeepAlive,
 		"throttle_window", cfg.ThrottleWindow,
 		"resolve_window", cfg.ResolveWindow,
 		"history", history,

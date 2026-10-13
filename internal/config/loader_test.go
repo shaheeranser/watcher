@@ -26,7 +26,8 @@ func TestParsePrecedence(t *testing.T) {
 					c.OllamaURL == DefaultOllamaURL &&
 					c.ContextBefore == 20 && c.ContextAfter == 10 &&
 					c.ContextBudget == 8192 && c.Workers == 1 &&
-					c.OllamaTimeout == 60*time.Second && c.OllamaMaxTokens == 512 &&
+					c.OllamaTimeout == DefaultOllamaTimeout && c.OllamaMaxTokens == 512 &&
+					c.OllamaKeepAlive == DefaultOllamaKeepAlive && c.OllamaAttempts == DefaultOllamaAttempts &&
 					c.ExplainWindow == 15*time.Minute &&
 					c.MaxBlockLines == 200 && !c.FromStart
 			},
@@ -40,6 +41,8 @@ func TestParsePrecedence(t *testing.T) {
 				"WATCHER_WORKERS":            "4",
 				"WATCHER_OLLAMA_TIMEOUT":     "5s",
 				"WATCHER_OLLAMA_MAX_TOKENS":  "256",
+				"WATCHER_OLLAMA_KEEP_ALIVE":  "1m",
+				"WATCHER_OLLAMA_ATTEMPTS":    "2",
 				"WATCHER_EXPLAIN_WINDOW":     "1m",
 				"WATCHER_FROM_START":         "true",
 				"WATCHER_MAX_BLOCK_LINES":    "50",
@@ -51,6 +54,7 @@ func TestParsePrecedence(t *testing.T) {
 				return c.OllamaURL == "http://ollama:11434" && c.ContextBefore == 5 &&
 					c.Workers == 4 && c.OllamaTimeout == 5*time.Second &&
 					c.OllamaMaxTokens == 256 &&
+					c.OllamaKeepAlive == time.Minute && c.OllamaAttempts == 2 &&
 					c.ExplainWindow == time.Minute && c.FromStart && c.MaxBlockLines == 50 &&
 					c.ResolveWindow == 90*time.Second &&
 					c.HeartbeatURL == "https://hc-ping.example/abc" && c.HeartbeatInterval == 30*time.Second
@@ -147,6 +151,16 @@ func TestParseValidation(t *testing.T) {
 			name:    "timeout must be positive",
 			args:    []string{"--model", "m", "--ollama-timeout", "0s"},
 			wantSub: "ollama-timeout must be positive",
+		},
+		{
+			name:    "keep-alive must not be negative",
+			args:    []string{"--model", "m", "--ollama-keep-alive", "-1s"},
+			wantSub: "ollama-keep-alive must not be negative",
+		},
+		{
+			name:    "attempts must be at least one",
+			args:    []string{"--model", "m", "--ollama-attempts", "0"},
+			wantSub: "ollama-attempts must be at least 1",
 		},
 	}
 
@@ -277,6 +291,13 @@ func TestParseRuntimeDefaults(t *testing.T) {
 	}
 	if got.ResolveWindow != DefaultResolveWindow {
 		t.Errorf("resolve-window = %s, want %s", got.ResolveWindow, DefaultResolveWindow)
+	}
+	if got.OllamaTimeout != DefaultOllamaTimeout || got.OllamaAttempts != DefaultOllamaAttempts {
+		t.Errorf("ollama timing defaults = %s/%d, want %s/%d",
+			got.OllamaTimeout, got.OllamaAttempts, DefaultOllamaTimeout, DefaultOllamaAttempts)
+	}
+	if got.OllamaKeepAlive != DefaultOllamaKeepAlive {
+		t.Errorf("ollama-keep-alive = %s, want %s", got.OllamaKeepAlive, DefaultOllamaKeepAlive)
 	}
 	if got.HeartbeatURL != "" || got.HeartbeatInterval != DefaultHeartbeatInterval {
 		t.Errorf("heartbeat defaults = %q/%s, want disabled at %s", got.HeartbeatURL, got.HeartbeatInterval, DefaultHeartbeatInterval)

@@ -46,6 +46,8 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	workers := fs.Int("workers", cfg.Workers, "concurrent backend workers")
 	ollamaTimeout := fs.Duration("ollama-timeout", cfg.OllamaTimeout, "timeout for a single model request")
 	ollamaMaxTokens := fs.Int("ollama-max-tokens", cfg.OllamaMaxTokens, "maximum tokens the model may generate per request")
+	ollamaKeepAlive := fs.Duration("ollama-keep-alive", cfg.OllamaKeepAlive, "how long Ollama keeps the model loaded between calls; 0 uses the server default")
+	ollamaAttempts := fs.Int("ollama-attempts", cfg.OllamaAttempts, "maximum attempts per explanation; a timeout is not retried")
 	explainWindow := fs.Duration("explain-window", cfg.ExplainWindow, "minimum interval between explanations of one fingerprint")
 	maxBlockLines := fs.Int("max-block-lines", cfg.MaxBlockLines, "maximum lines kept in a crash block")
 	fromStart := fs.Bool("from-start", cfg.FromStart, "read a file source from the beginning instead of the end")
@@ -87,6 +89,8 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	cfg.Workers = *workers
 	cfg.OllamaTimeout = *ollamaTimeout
 	cfg.OllamaMaxTokens = *ollamaMaxTokens
+	cfg.OllamaKeepAlive = *ollamaKeepAlive
+	cfg.OllamaAttempts = *ollamaAttempts
 	cfg.ExplainWindow = *explainWindow
 	cfg.MaxBlockLines = *maxBlockLines
 	cfg.FromStart = *fromStart
@@ -183,6 +187,7 @@ func applyEnv(cfg *Config, getenv func(string) string) error {
 		{"WATCHER_CONTEXT_BUDGET", &cfg.ContextBudget},
 		{"WATCHER_WORKERS", &cfg.Workers},
 		{"WATCHER_OLLAMA_MAX_TOKENS", &cfg.OllamaMaxTokens},
+		{"WATCHER_OLLAMA_ATTEMPTS", &cfg.OllamaAttempts},
 		{"WATCHER_MAX_BLOCK_LINES", &cfg.MaxBlockLines},
 		{"WATCHER_WEBHOOK_RETRIES", &cfg.WebhookRetries},
 		{"WATCHER_OCCURRENCE_CAP", &cfg.OccurrenceCap},
@@ -200,6 +205,7 @@ func applyEnv(cfg *Config, getenv func(string) string) error {
 		dst  *time.Duration
 	}{
 		{"WATCHER_OLLAMA_TIMEOUT", &cfg.OllamaTimeout},
+		{"WATCHER_OLLAMA_KEEP_ALIVE", &cfg.OllamaKeepAlive},
 		{"WATCHER_EXPLAIN_WINDOW", &cfg.ExplainWindow},
 		{"WATCHER_DOCKER_SINCE", &cfg.DockerSince},
 		{"WATCHER_WEBHOOK_BACKOFF_BASE", &cfg.WebhookBackoffBase},

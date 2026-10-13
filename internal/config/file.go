@@ -49,6 +49,8 @@ type fileConfig struct {
 	OllamaURL       string       `toml:"ollama_url"`
 	OllamaTimeout   tomlDuration `toml:"ollama_timeout"`
 	OllamaMaxTokens int          `toml:"ollama_max_tokens"`
+	OllamaKeepAlive tomlDuration `toml:"ollama_keep_alive"`
+	OllamaAttempts  int          `toml:"ollama_attempts"`
 	ContextBefore   int          `toml:"context_before"`
 	ContextAfter    int          `toml:"context_after"`
 	ContextBudget   int          `toml:"context_budget"`
@@ -160,6 +162,12 @@ func applyFileConfig(cfg *Config, fc fileConfig, md toml.MetaData) {
 	}
 	if md.IsDefined("ollama_max_tokens") {
 		cfg.OllamaMaxTokens = fc.OllamaMaxTokens
+	}
+	if md.IsDefined("ollama_keep_alive") {
+		cfg.OllamaKeepAlive = time.Duration(fc.OllamaKeepAlive)
+	}
+	if md.IsDefined("ollama_attempts") {
+		cfg.OllamaAttempts = fc.OllamaAttempts
 	}
 	if md.IsDefined("context_before") {
 		cfg.ContextBefore = fc.ContextBefore

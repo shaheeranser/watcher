@@ -22,6 +22,21 @@ const DefaultDockerHost = "unix:///var/run/docker.sock"
 // spooled as one JSON line, so a wedged receiver never loses the report.
 const DefaultWebhookFallback = "undelivered.jsonl"
 
+// DefaultOllamaTimeout bounds one model request. A CPU-only box running a small
+// model can take well over a minute per explanation, so the default leaves room
+// for the model to finish rather than reporting it unavailable.
+const DefaultOllamaTimeout = 120 * time.Second
+
+// DefaultOllamaKeepAlive holds the model in memory between calls, so a cold
+// load is paid once instead of on every explanation. It is longer than the
+// default explanation window, so an active incident never triggers a reload.
+const DefaultOllamaKeepAlive = 30 * time.Minute
+
+// DefaultOllamaAttempts bounds how many times one explanation may be attempted
+// before it is reported unavailable. A timeout is not retried, so this only
+// bounds genuine transient failures.
+const DefaultOllamaAttempts = 3
+
 // DefaultResolveWindow is how long an incident must be quiet before it is
 // announced resolved. It clears Docker's restart backoff (at most a minute), so
 // a genuine restart loop is never misread as resolved.
@@ -131,6 +146,12 @@ type Config struct {
 	OllamaTimeout   time.Duration
 	OllamaMaxTokens int
 
+	// OllamaKeepAlive holds the model in memory between calls; zero leaves the
+	// server's own default. OllamaAttempts bounds how many times one
+	// explanation is attempted; a timeout is not retried.
+	OllamaKeepAlive time.Duration
+	OllamaAttempts  int
+
 	ExplainWindow time.Duration
 	MaxBlockLines int
 
@@ -211,8 +232,10 @@ func Default() Config {
 		ContextAfter:       10,
 		ContextBudget:      8192,
 		Workers:            1,
-		OllamaTimeout:      60 * time.Second,
+		OllamaTimeout:      DefaultOllamaTimeout,
 		OllamaMaxTokens:    512,
+		OllamaKeepAlive:    DefaultOllamaKeepAlive,
+		OllamaAttempts:     DefaultOllamaAttempts,
 		ExplainWindow:      15 * time.Minute,
 		MaxBlockLines:      200,
 		FromStart:          false,
@@ -283,6 +306,12 @@ func (c Config) Validate() error {
 	}
 	if c.OllamaMaxTokens <= 0 {
 		errs = append(errs, fmt.Errorf("ollama-max-tokens must be positive, got %d", c.OllamaMaxTokens))
+	}
+	if c.OllamaKeepAlive < 0 {
+		errs = append(errs, fmt.Errorf("ollama-keep-alive must not be negative, got %s", c.OllamaKeepAlive))
+	}
+	if c.OllamaAttempts < 1 {
+		errs = append(errs, fmt.Errorf("ollama-attempts must be at least 1, got %d", c.OllamaAttempts))
 	}
 	if c.ExplainWindow < 0 {
 		errs = append(errs, fmt.Errorf("explain-window must not be negative, got %s", c.ExplainWindow))

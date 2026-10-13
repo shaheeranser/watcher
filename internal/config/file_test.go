@@ -88,6 +88,8 @@ func TestConfigFileLoadsValues(t *testing.T) {
 model = "from-file"
 ollama_url = "http://ollama:11434"
 ollama_timeout = "5s"
+ollama_keep_alive = "10m"
+ollama_attempts = 2
 workers = 3
 from_start = true
 
@@ -123,6 +125,9 @@ retention = "1h"
 	if cfg.Model != "from-file" || cfg.OllamaURL != "http://ollama:11434" ||
 		cfg.OllamaTimeout != 5*time.Second || cfg.Workers != 3 || !cfg.FromStart {
 		t.Errorf("top-level values not applied: %+v", cfg)
+	}
+	if cfg.OllamaKeepAlive != 10*time.Minute || cfg.OllamaAttempts != 2 {
+		t.Errorf("ollama timing values not applied: %+v", cfg)
 	}
 	if cfg.Containers != "project=shop" || !cfg.ContainersSet || cfg.DockerSince != 90*time.Second {
 		t.Errorf("docker values not applied: %+v", cfg)
