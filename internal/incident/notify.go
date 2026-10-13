@@ -134,7 +134,10 @@ func (n *Notifier) Explained(label, fingerprint string, now time.Time) (Notifica
 
 // Resolve emits the single resolved notification for every incident that has
 // been quiet for the resolve window, and marks them resolved so a later
-// occurrence starts a new cycle (PROD-STM-3, PROD-STM-4). Incidents the process
+// occurrence starts a new cycle (PROD-STM-3, PROD-STM-4). An incident whose
+// explanation is still in flight is held back until it settles, so the resolved
+// notification carries the cause instead of arriving with an explanation that
+// lands a moment later and is then dropped (PROD-STM-10). Incidents the process
 // is not tracking are never resolved, so a restart cannot produce a spurious
 // resolved burst (PROD-STM-7).
 func (n *Notifier) Resolve(now time.Time) []Notification {
@@ -147,11 +150,10 @@ func (n *Notifier) Resolve(now time.Time) []Notification {
 
 	var out []Notification
 	for k, st := range n.states {
-		if st.resolved || now.Sub(st.lastSeen) < n.resolve {
+		if st.resolved || st.pending || now.Sub(st.lastSeen) < n.resolve {
 			continue
 		}
 		st.resolved = true
-		st.pending = false
 		out = append(out, Notification{Label: k.label, Fingerprint: k.fingerprint, Kind: KindResolved})
 	}
 	return out

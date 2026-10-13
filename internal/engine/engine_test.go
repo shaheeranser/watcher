@@ -612,6 +612,84 @@ func TestNotificationResolvesAndReopensFresh(t *testing.T) {
 	}
 }
 
+// gateBackend blocks its first Explain call until released, so a test can hold
+// an explanation in flight while the resolve ticker runs.
+type gateBackend struct {
+	entered chan struct{}
+	release chan struct{}
+	resp    backend.Explanation
+}
+
+func (g *gateBackend) Name() string  { return "gate" }
+func (g *gateBackend) Model() string { return "gate-model" }
+
+func (g *gateBackend) Explain(ctx context.Context, _ backend.Request) (backend.Explanation, error) {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-g.release:
+		return g.resp, nil
+	case <-ctx.Done():
+		return backend.Explanation{}, ctx.Err()
+	}
+}
+
+// TestResolutionWaitsForTheExplanation reproduces the defect where a slow model
+// let the resolve window elapse first: the resolved notification must be held
+// back until the explanation lands and then carry it.
+func TestResolutionWaitsForTheExplanation(t *testing.T) {
+	be := &gateBackend{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		resp:    validExplanation(),
+	}
+	notify := &captureSink{}
+	clock := &fakeClock{t: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	src := &chanSource{name: "app.log", lines: make(chan string, 16)}
+
+	opts := baseOptions(src, be, &captureSink{})
+	opts.Notifications = notify
+	opts.ThrottleWindow = time.Minute
+	opts.ResolveWindow = 10 * time.Second
+	opts.resolveTick = 2 * time.Millisecond
+	opts.now = clock.Now
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	eng := New(opts)
+	go func() { done <- eng.Run(ctx) }()
+
+	send(src, goPanic)
+	waitFor(t, func() bool { return hasKind(notify.all(), "new") })
+
+	// The model call is now blocked. Quiet past the resolve window while it
+	// works must not resolve the incident.
+	<-be.entered
+	clock.Advance(11 * time.Second)
+	time.Sleep(50 * time.Millisecond)
+	if hasKind(notify.all(), "resolved") {
+		t.Fatal("resolved while the explanation was still in flight")
+	}
+
+	close(be.release)
+	waitFor(t, func() bool { return hasKind(notify.all(), "resolved") })
+	for _, r := range notify.all() {
+		if r.Notification == "resolved" && r.Explanation == nil {
+			t.Errorf("the resolved notification must carry the explanation: %+v", r)
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return")
+	}
+}
+
 func hasKind(results []sink.Result, kind string) bool {
 	for _, r := range results {
 		if r.Notification == kind {

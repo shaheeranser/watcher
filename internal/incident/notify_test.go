@@ -48,6 +48,7 @@ func TestThrottledOngoingReportsTheOccurrence(t *testing.T) {
 func TestResolveAfterQuietWindowHappensOnce(t *testing.T) {
 	n := NewNotifier(15*time.Minute, 2*time.Minute)
 	n.Observe("app.log", "fp1", base)
+	n.Explained("app.log", "fp1", base.Add(time.Second))
 
 	if got := n.Resolve(base.Add(90 * time.Second)); len(got) != 0 {
 		t.Fatalf("resolved before the window closed: %+v", got)
@@ -61,9 +62,28 @@ func TestResolveAfterQuietWindowHappensOnce(t *testing.T) {
 	}
 }
 
+func TestResolveWaitsForThePendingExplanation(t *testing.T) {
+	n := NewNotifier(15*time.Minute, 2*time.Minute)
+	n.Observe("app.log", "fp1", base)
+
+	// The quiet window has closed, but the explanation the new notification
+	// promised is still in flight. Resolving now would emit a resolved message
+	// whose explanation lands a moment later and is then dropped.
+	if got := n.Resolve(base.Add(5 * time.Minute)); len(got) != 0 {
+		t.Fatalf("resolved while the explanation was pending: %+v", got)
+	}
+
+	n.Explained("app.log", "fp1", base.Add(5*time.Minute+time.Second))
+	got := n.Resolve(base.Add(5*time.Minute + 2*time.Second))
+	if len(got) != 1 || got[0].Kind != KindResolved || got[0].Fingerprint != "fp1" {
+		t.Fatalf("resolve once the explanation settled = %+v, want one resolved for fp1", got)
+	}
+}
+
 func TestRecurrenceAfterResolveStartsAFreshCycle(t *testing.T) {
 	n := NewNotifier(15*time.Minute, 2*time.Minute)
 	n.Observe("app.log", "fp1", base)
+	n.Explained("app.log", "fp1", base.Add(time.Second))
 	n.Resolve(base.Add(3 * time.Minute))
 
 	obs := n.Observe("app.log", "fp1", base.Add(4*time.Minute))
@@ -140,6 +160,7 @@ func TestExplainedDoesNothingWithoutAPendingNotification(t *testing.T) {
 func TestRestartEmitsNoSpuriousResolve(t *testing.T) {
 	first := NewNotifier(15*time.Minute, 2*time.Minute)
 	first.Observe("app.log", "fp1", base)
+	first.Explained("app.log", "fp1", base.Add(time.Second))
 	first.Resolve(base.Add(3 * time.Minute))
 
 	// A fresh process has forgotten the fingerprint entirely, so it never
