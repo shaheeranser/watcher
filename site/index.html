@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#070a12">
+<title>Watcher: your logs already know what broke</title>
+<meta name="description" content="A self-hosted daemon that reads your application logs, notices crashes on its own, and explains them in plain English with a small local model. No cloud calls, no API keys.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="Watcher: your logs already know what broke">
+<meta property="og:description" content="Reads your logs, notices crashes on its own, explains them in plain English with a small local model. No cloud calls, no API keys.">
+<meta property="og:url" content="https://shaheeranser.github.io/watcher/">
+<meta property="og:image" content="https://shaheeranser.github.io/watcher/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img src="watcher.svg" alt="" width="26" height="16" aria-hidden="true">
+      watcher
+    </a>
+    <nav aria-label="Page sections">
+      <ul>
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#noise">Signal</a></li>
+        <li><a href="#status">Status</a></li>
+        <li><a href="#contribute">Contribute</a></li>
+        <li><a href="https://github.com/shaheeranser/watcher" rel="noopener">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <span id="top"></span>
+
+  <!-- ---------- Hero ---------- -->
+  <div class="hero">
+    <div class="wrap hero-grid">
+
+      <div>
+        <p class="eyebrow reveal" style="--delay:0ms">Self-hosted · MIT · pre-1.0</p>
+
+        <h1 class="reveal" style="--delay:60ms">
+          Your logs already know <em>what broke</em>.
+        </h1>
+
+        <p class="lede reveal" style="--delay:120ms">
+          Watcher runs in the background reading your application logs. When
+          something crashes, it works out the root cause and tells you in plain
+          English, using a small model on the machine you already have.
+        </p>
+
+        <div class="install reveal" style="--delay:180ms">
+          <div class="cmd">
+            <code id="install-cmd"><span class="prompt">$ </span>curl -fsSL https://github.com/shaheeranser/watcher/releases/latest/download/install.sh | sudo sh</code>
+            <button class="copy" type="button" data-copy="#install-cmd" data-label="Copy">Copy</button>
+          </div>
+          <p class="cmd-note">
+            Linux and macOS. No Go toolchain, no compiler, no build step. The
+            installer verifies the download against the published checksum.
+          </p>
+
+          <p class="hero-run reveal" style="--delay:220ms">
+            <b>watcher onboard</b><br>
+            <b>watcher run --model qwen2.5:1.5b --file /var/log/app.log</b>
+          </p>
+        </div>
+
+        <div class="cta-row reveal" style="--delay:260ms">
+          <a class="btn btn-primary" href="https://github.com/shaheeranser/watcher#readme" rel="noopener">
+            Read the docs
+          </a>
+          <a class="btn btn-ghost" href="#contribute">Good first issues</a>
+        </div>
+      </div>
+
+      <!-- The proof object: a real incident, transcribed from a live test run. -->
+      <article class="incident reveal" style="--delay:200ms" aria-labelledby="incident-title">
+        <p class="incident-head">
+          <span class="dot" aria-hidden="true"></span>
+          New incident
+          <span class="badge">Critical</span>
+        </p>
+
+        <h3 id="incident-title">
+          Application startup failure due to missing RELAYBOX_API_TOKEN.
+        </h3>
+
+        <dl>
+          <div>
+            <dt class="cause" id="cause-label">Likely cause</dt>
+            <dd aria-labelledby="cause-label">
+              The application is attempting to load configuration without the
+              required <code>RELAYBOX_API_TOKEN</code> environment variable.
+            </dd>
+          </div>
+          <div>
+            <dt class="fix" id="fix-label">Suggested fix</dt>
+            <dd aria-labelledby="fix-label">
+              Ensure the <code>RELAYBOX_API_TOKEN</code> environment variable is
+              set before attempting to load configuration.
+            </dd>
+          </div>
+        </dl>
+
+        <p class="meta">
+          <span>source: api</span><span>detector: generic-fatal</span><span>fingerprint: 62b7d353dab61403</span><span>confidence: 0.30</span><span>model: qwen2.5:1.5b</span>
+        </p>
+
+        <p class="incident-foot">
+          From a real test run. I broke a live service on purpose, with no crash
+          switch wired into it.<br>
+          <span class="honest">It even tells you when it is unsure:</span> this
+          run flagged that some cited evidence was not in the excerpt, and
+          lowered its own confidence to 0.30.
+        </p>
+      </article>
+
+    </div>
+  </div>
+
+  <!-- ---------- How it works ---------- -->
+  <section id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2 id="how-title">It comes to you, so you never invoke it against an incident</h2>
+        <p>
+          Push, not pull. Watcher watches continuously and only speaks up when
+          something actually breaks.
+        </p>
+      </div>
+
+      <ol class="flow" role="list">
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">01</span>
+          <h3>Read</h3>
+          <p>
+            A file, <code>stdin</code>, or several labelled sources. Inside Docker
+            Compose it attaches to its own sibling containers over the Docker
+            socket, with no configuration.
+          </p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">02</span>
+          <h3>Detect</h3>
+          <p>
+            Go panics, Python tracebacks, and generic fatal or exception lines.
+            Deliberately heuristic: logs have no universal format, and requiring
+            one would make Watcher undeployable anywhere unusual.
+          </p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">03</span>
+          <h3>Fingerprint</h3>
+          <p>
+            Addresses, timestamps, UUIDs and request ids are normalised away, so
+            the same failure keeps the same identity. This is what stops a crash
+            loop from becoming fifty alerts.
+          </p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">04</span>
+          <h3>Curate</h3>
+          <p>
+            A bounded excerpt of the crash block and its surrounding context is
+            extracted within a token budget, so a small model still gets a clean,
+            affordable prompt.
+          </p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">05</span>
+          <h3>Explain</h3>
+          <p>
+            A local Ollama model returns a summary, a likely cause, the evidence
+            it used, a suggested fix, a confidence, and a severity.
+          </p>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">06</span>
+          <h3>Report</h3>
+          <p>
+            Readable text in a terminal, JSON Lines when piped, and lifecycle
+            notifications to Slack, Discord or a generic webhook. One message
+            when it breaks, one when it recovers.
+          </p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ---------- Signal vs noise ---------- -->
+  <section id="noise" aria-labelledby="noise-title">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2 id="noise-title">A crash loop is one incident, not fifty</h2>
+        <p>
+          Deduplication is decided by the fingerprint, so a service failing in a
+          loop produces a single incident with a rising count.
+        </p>
+      </div>
+
+      <div class="compare">
+        <div class="compare-col noisy">
+          <p class="verdict">What a raw log gives you</p>
+          <div class="pips" aria-hidden="true">
+            <span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span><span class="pip"></span>
+          </div>
+          <p>Twenty-four identical stack traces, and no idea which one matters.</p>
+          <p class="count">24 occurrences</p>
+        </div>
+
+        <div class="compare-col quiet">
+          <p class="verdict">What Watcher sends</p>
+          <div class="pips" aria-hidden="true"><span class="pip one"></span></div>
+          <p>
+            One incident, announced once, then an update when it recovers. The
+            notifications follow the incident, not the log line.
+          </p>
+          <p class="count">1 incident · count 24 · new → ongoing → resolved</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------- Honest status ---------- -->
+  <section id="status" aria-labelledby="status-title">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2 id="status-title">Where this actually is</h2>
+        <p>
+          Watcher is pre-1.0 and currently published as a release candidate. It
+          is tested against real services rather than declared finished, so here
+          is the real position rather than a pitch.
+        </p>
+      </div>
+
+      <div class="truth">
+        <div class="truth-col ok">
+          <h3><span class="dot" aria-hidden="true"></span> Built and unit-tested</h3>
+          <ul>
+            <li>The engine, its production runtime, and crash deduplication.</li>
+            <li><code>watcher attach</code>, a live dashboard over SQLite incident history and a read API on a unix socket.</li>
+            <li><code>watcher eval</code>, scoring explanations against a ground-truth file.</li>
+            <li><code>watcher onboard</code>, the TOML config file, the checksum-verified installer, and a systemd unit.</li>
+            <li>Webhook delivery with retry, a fallback spool, and a heartbeat.</li>
+          </ul>
+        </div>
+
+        <div class="truth-col gap">
+          <h3><span class="dot" aria-hidden="true"></span> Known gaps, stated plainly</h3>
+          <ul>
+            <li>The live Docker Compose checks and the evaluation-harness checks have not been run end to end yet. The behaviour behind them is covered by unit tests; the integration is unverified.</li>
+            <li>No default model is bundled. <code>--model</code> is required, so you choose.</li>
+            <li>The webhook spool is never replayed automatically. It captures undeliverable notifications so nothing is lost, but draining it is manual.</li>
+            <li>Notification state is process-local: after a restart, a still-failing crash is announced as new rather than ongoing.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------- Contribute ---------- -->
+  <section id="contribute" aria-labelledby="contribute-title">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2 id="contribute-title">Pick something small and real</h2>
+        <p>
+          These are scoped, have a definition of done, and can be tested
+          offline. Every one of them is a genuine gap in the code or the docs,
+          not busywork. Go is 1.26 or newer; read
+          <a href="https://github.com/shaheeranser/watcher/blob/main/CONTRIBUTING.md" rel="noopener">CONTRIBUTING.md</a>
+          first, and
+          <a href="https://github.com/shaheeranser/watcher/blob/main/AGENTS.md" rel="noopener">AGENTS.md</a>
+          if you are working with an agent.
+        </p>
+      </div>
+
+      <ul class="issues">
+        <li>
+          <a href="https://github.com/shaheeranser/watcher/issues/1" rel="noopener">
+            <span class="num mono">#1</span>
+            <span class="title">watcher --version prints nothing, and the bug template asks for it</span>
+            <span class="kind">small</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/shaheeranser/watcher/issues/3" rel="noopener">
+            <span class="num mono">#3</span>
+            <span class="title">Add an ntfy webhook payload format</span>
+            <span class="kind">small</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/shaheeranser/watcher/issues/2" rel="noopener">
+            <span class="num mono">#2</span>
+            <span class="title">Detect JavaScript / Node.js stack traces</span>
+            <span class="kind">small</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/shaheeranser/watcher/issues/4" rel="noopener">
+            <span class="num mono">#4</span>
+            <span class="title">Document the development loop, from a clean clone to a rendered explanation</span>
+            <span class="kind">docs</span>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/shaheeranser/watcher/issues/5" rel="noopener">
+            <span class="num mono">#5</span>
+            <span class="title">Add an examples/ directory with one worked end-to-end recipe</span>
+            <span class="kind">docs</span>
+          </a>
+        </li>
+      </ul>
+
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/shaheeranser/watcher/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22" rel="noopener">
+          All good first issues
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/shaheeranser/watcher/tree/main/specs" rel="noopener">
+          Read the specs
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <p>MIT licensed. Built in public. The model runs locally via Ollama.</p>
+    <a href="https://github.com/shaheeranser/watcher" rel="noopener">GitHub</a>
+    <a href="https://github.com/shaheeranser/watcher/releases" rel="noopener">Releases</a>
+    <a href="https://ollama.com" rel="noopener">Ollama</a>
+    <a href="https://github.com/shaheeranser/watcher/blob/main/LICENSE" rel="noopener">License</a>
+  </div>
+</footer>
+
+<div id="live" class="sr-only" role="status" aria-live="polite"></div>
+
+<script src="main.js"></script>
+</body>
+</html>
