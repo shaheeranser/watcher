@@ -40,6 +40,9 @@ ollama pull qwen2.5:1.5b
 watcher run --model qwen2.5:1.5b --file /var/log/app.log
 ```
 
+Use `watcher --version` to report the binary's build version when filing a bug
+report.
+
 `--model` is required. Results render for a terminal, or as one JSON object per
 line when redirected:
 

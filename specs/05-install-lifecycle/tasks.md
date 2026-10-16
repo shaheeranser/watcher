@@ -20,6 +20,8 @@ Suggested order: config file → installer → service unit → onboarding → d
       *(INST-PKG-6)*
 - [x] **T-1.6** — Tests: fake release server; checksum pass/fail; path
       selection; uninstall; each error path.
+- [x] **T-1.7** — Embed the release tag in the binary for `watcher --version`;
+      source builds report `dev`. *(INST-PKG-8)*
 
 ## 2. Config file
 

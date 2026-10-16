@@ -6,10 +6,14 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 )
+
+// version is replaced by release builds with the Git tag.
+var version = "dev"
 
 // verbs is the single registration point for subcommands. A new verb (onboard,
 // eval) is added here and nowhere else; the grammar is fixed once.
@@ -21,13 +25,18 @@ var verbs = map[string]func([]string) int{
 }
 
 func main() {
-	os.Exit(dispatch(os.Args[1:], verbs))
+	os.Exit(dispatch(os.Args[1:], verbs, os.Stdout))
 }
 
 // dispatch interprets its first non-flag argument as a verb. A bare invocation
 // (no verb, or flags first) is an alias for run, so milestone 01's invocations
 // keep working unchanged.
-func dispatch(args []string, table map[string]func([]string) int) int {
+func dispatch(args []string, table map[string]func([]string) int, stdout io.Writer) int {
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Fprintf(stdout, "watcher %s\n", version)
+		return 0
+	}
+
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		verb := args[0]
 		fn, ok := table[verb]

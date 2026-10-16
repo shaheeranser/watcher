@@ -61,6 +61,9 @@ precedence).
   SYSTEM SHALL abort with a clear message and a non-zero exit, leaving no
   partial install.
 - **INST-PKG-7** — Per-user installation SHALL NOT require root.
+- **INST-PKG-8** — Release binaries SHALL report the Git tag used to build
+  them through `watcher --version`; source builds without an injected version
+  SHALL report `dev`.
 
 ### 3.2 Config file (`INST-CFG`)
 

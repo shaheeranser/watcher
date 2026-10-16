@@ -39,7 +39,7 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: "0"
-        run: go build -trimpath -ldflags "-s -w" -o watcher ./cmd/watcher
+        run: go build -trimpath -ldflags "-s -w -X main.version=$(git describe --tags --always)" -o watcher ./cmd/watcher
 
       - name: Package
         run: tar -czf "watcher_${{ matrix.os }}_${{ matrix.arch }}.tar.gz" watcher

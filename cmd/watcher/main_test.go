@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -71,7 +72,7 @@ func TestDispatch(t *testing.T) {
 			spy := &spyDaemon{code: 7}
 			table := map[string]func([]string) int{"run": spy.run}
 
-			got := dispatch(tt.args, table)
+			got := dispatch(tt.args, table, io.Discard)
 			if got != tt.wantCode {
 				t.Errorf("code = %d, want %d", got, tt.wantCode)
 			}
@@ -82,6 +83,22 @@ func TestDispatch(t *testing.T) {
 				t.Errorf("daemon args = %v, want %v", spy.args, tt.wantArgs)
 			}
 		})
+	}
+}
+
+func TestVersionFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	spy := &spyDaemon{}
+	table := map[string]func([]string) int{"run": spy.run}
+
+	if code := dispatch([]string{"--version"}, table, &stdout); code != 0 {
+		t.Fatalf("--version exit = %d, want 0", code)
+	}
+	if got, want := stdout.String(), "watcher dev\n"; got != want {
+		t.Errorf("--version output = %q, want %q", got, want)
+	}
+	if spy.called {
+		t.Error("--version dispatched to run")
 	}
 }
 
