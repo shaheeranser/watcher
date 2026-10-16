@@ -24,6 +24,8 @@ Suggested order: CLI → multi-source → Docker source → webhook → verifica
 - [x] **T-1.5** — Preserve the exit-code contract. *(RT-CLI-5)*
 - [x] **T-1.6** — Tests: dispatch table, alias equivalence, unknown verb, exit
       codes.
+- [x] **T-1.7** — Report the build version through `--version`; default to
+      `dev` when no version is injected. *(RT-CLI-7)*
 
 ## 2. Labeled multi-source input
 

@@ -34,6 +34,7 @@ an alias so nothing built in 01 breaks.
 watcher run [flags]        # the daemon (this milestone)
 watcher     [flags]        # alias for `watcher run`
 watcher --help             # verbs, then run's flags
+watcher --version          # build version
 ```
 
 ```mermaid
@@ -49,6 +50,8 @@ Design notes:
 - Dispatch is a small registry (`map[string]func(argv) int`); 01b registers only
   `run`. `onboard` (05), `eval` (04), and `attach` (03) register here later, so
   the grammar is fixed once rather than re-litigated per milestone.
+- The global `--version` flag is handled before verb dispatch and reports the
+  injected build version, or `dev` for a source build without one.
 - The alias exists precisely so `watcher --file /var/log/app.log` keeps working;
   RT-CLI-2 makes that a requirement, not a courtesy.
 - Exit codes are unchanged from 01 (CORE-OUT-5): 2 for bad configuration, 1 for

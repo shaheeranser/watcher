@@ -60,6 +60,9 @@ Requirement IDs use the form `RT-<AREA>-<n>`.
 - **RT-CLI-6** — Verb dispatch SHALL be the single registration point for
   future verbs (`onboard`, `eval`, `attach`); this milestone registers only
   `run`.
+- **RT-CLI-7** — WHEN invoked with `--version`, THE SYSTEM SHALL print its
+  build version and exit 0; builds without an injected version SHALL report
+  `dev`.
 
 ### 3.2 Labeled multi-source input (`RT-SRC`)
 

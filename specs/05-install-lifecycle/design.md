@@ -259,7 +259,9 @@ milestone can revisit a choice rather than rediscover it.
   introduced.
 - **OD-05-3 — Release artifacts and checksums.** *Resolved:* GitHub Releases,
   built by a tag-triggered workflow. Assets are `watcher_<os>_<arch>.tar.gz`,
-  `checksums.txt`, and `watcher.service`; the asset names carry no version, so
+  `checksums.txt`, and `watcher.service`; release binaries embed
+  `git describe --tags --always` so `watcher --version` reports the tag. The
+  asset names carry no version, so
   the installer builds both the `latest` and a pinned URL by plain construction,
   with no GitHub API call, and verifies the tarball (and the unit, for
   `--service`) against `checksums.txt`.
