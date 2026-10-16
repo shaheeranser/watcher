@@ -59,6 +59,12 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;
+  /* Inherited, and `anywhere` rather than `break-word`: `break-word` does not
+     reduce an element's min-content width, so a long identifier like
+     RELAYBOX_API_TOKEN still forced grid tracks wider than the viewport at
+     large text sizes. Long words now break only when they genuinely cannot
+     fit; normal prose still breaks at spaces first. */
+  overflow-wrap: anywhere;
 }
 
 /* A single low, wide bloom behind the top of the page. Decorative only. */
@@ -336,7 +342,9 @@ p { margin: 0; }
 
 .incident h3 { margin-top: var(--s3); font-size: 1.0625rem; font-weight: 600; line-height: 1.4; }
 
-.incident dl { margin: var(--s4) 0 0; display: grid; gap: var(--s3); }
+/* minmax(0, 1fr) so the track can shrink below its items' min-content; an
+   implicit auto column could not. */
+.incident dl { margin: var(--s4) 0 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
 .incident dt {
   font-family: var(--mono);
   font-size: 0.6875rem;
@@ -356,9 +364,10 @@ p { margin: 0; }
   font-size: 0.6875rem;
   color: var(--ink-dim);
   line-height: 1.9;
-  word-break: break-word;
+  /* `anywhere`, not `nowrap` on the spans: a nowrap fingerprint pushed the whole
+     document sideways once text size grew. */
+  overflow-wrap: anywhere;
 }
-.meta span { white-space: nowrap; }
 .meta span + span::before { content: " · "; color: var(--line-strong); }
 
 .incident-foot {
@@ -426,7 +435,6 @@ section { padding-block: var(--s7); border-top: 1px solid var(--line); }
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 1px 5px;
-  white-space: nowrap;
 }
 
 /* Dedupe: a true two-column contrast, not a card pair. */
@@ -474,6 +482,8 @@ section { padding-block: var(--s7); border-top: 1px solid var(--line); }
 .issues li { border-bottom: 1px solid var(--line); }
 .issues a {
   display: flex;
+  /* Let the kind pill drop to its own line rather than force the row wider. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: var(--s3);
   padding: var(--s3) var(--s2);
