@@ -10,7 +10,7 @@ explains the root cause with a small self-hosted model (via
 invoke it against an incident by hand.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-live-3b82f6.svg)](https://shaheeranser.github.io/watcher/)
+[![Website](https://img.shields.io/badge/website-live-3b82f6.svg)](https://shaheeranser.github.io/projects/watcher/)
 
 ## Install
 
